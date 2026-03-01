@@ -3,9 +3,7 @@ name: Creare Magicae Ordinationis Fabrica
 
 on:
   push:
-    branches: 
-      - main
-      - pocketmage_wifi # TODO: REMOVE BEFORE PR
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
