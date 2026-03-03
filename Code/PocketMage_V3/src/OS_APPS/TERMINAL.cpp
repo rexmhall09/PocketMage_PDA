@@ -1096,8 +1096,8 @@ void compileWrench(const char* wrenchCode) {
   int outLen;
 
   // Compile code
-  char errMsg[256] = {0};
-  int err = wr_compile(wrenchCode, strlen(wrenchCode), &outBytes, &outLen, errMsg);
+  WRstr errMsg;
+  int err = wr_compile(wrenchCode, strlen(wrenchCode), &outBytes, &outLen, &errMsg);
 
   // Run the code
   if (err == 0) {
@@ -1105,7 +1105,7 @@ void compileWrench(const char* wrenchCode) {
   }
 
   // Output error message
-  if (errMsg && errMsg[0] != '\0') {
+  if (errMsg.c_str() && errMsg[0] != '\0') {
     const char* p = errMsg;
     const char* lineStart = p;
 
