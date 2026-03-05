@@ -10,7 +10,7 @@
 #if !OTA_APP  // POCKETMAGE_OS
 static constexpr const char* TAG = "TXT_NEWz";
 
-// Font includes
+#pragma region Font includes
 // Mono
 #include <Fonts/FreeMono9pt8b.h>
 #include <Fonts/FreeMonoBold12pt8b.h>
@@ -53,9 +53,6 @@ static constexpr const char* TAG = "TXT_NEWz";
 // ------------------ General ------------------
 enum TXTState_NEW { TXT_, FONT, SAVE_AS, LOAD_FILE, JOURNAL_MODE, NEW_FILE };
 TXTState_NEW CurrentTXTState_NEW = TXT_;
-
-#define TYPE_INTERFACE_TIMEOUT 5000  // ms
-#define SCROLL_LINE_OFFSET 3         // lines
 
 // ------------------ Fonts ------------------
 #define SPECIAL_PADDING 20      // Padding for lists, code blocks, quote blocks
@@ -111,83 +108,13 @@ void setFontStyle(FontFamily f) {
   fontStyle = f;
 }
 
-const GFXfont* pickFont(char style, bool bold, bool italic) {
-  FontMap& fm = fonts[fontStyle];  // currently active family
-
-  switch (style) {
-    case '1':  // H1
-      if (bold && italic)
-        return fm.h1_BI;
-      if (bold)
-        return fm.h1_B;
-      if (italic)
-        return fm.h1_I;
-      return fm.h1;
-
-    case '2':  // H2
-      if (bold && italic)
-        return fm.h2_BI;
-      if (bold)
-        return fm.h2_B;
-      if (italic)
-        return fm.h2_I;
-      return fm.h2;
-
-    case '3':  // H3
-      if (bold && italic)
-        return fm.h3_BI;
-      if (bold)
-        return fm.h3_B;
-      if (italic)
-        return fm.h3_I;
-      return fm.h3;
-
-    case '>':  // Quote
-      if (bold && italic)
-        return fm.quote_BI;
-      if (bold)
-        return fm.quote_B;
-      if (italic)
-        return fm.quote_I;
-      return fm.quote;
-
-    case '-':  // List
-      if (bold && italic)
-        return fm.list_BI;
-      if (bold)
-        return fm.list_B;
-      if (italic)
-        return fm.list_I;
-      return fm.list;
-
-    case 'C':  // Code
-      if (bold && italic)
-        return fm.code_BI;
-      if (bold)
-        return fm.code_B;
-      if (italic)
-        return fm.code_I;
-      return fm.code;
-
-    default:  // Normal
-      if (bold && italic)
-        return fm.normal_BI;
-      if (bold)
-        return fm.normal_B;
-      if (italic)
-        return fm.normal_I;
-      return fm.normal;
-  }
-}
-
 // ------------------ Document Variables ------------------
 static bool updateScreen = false;
+static uint16_t currentLineNum = 0;
+static uint16_t topVisibleLine = 0;
 
-String currentLine = "";
-ulong currentLineNum = 0;
-
-#define MAX_LINES 2000
-#define LINE_CAP 64
+#define MAX_LINES 5000   // Max number of lines in document
+#define LINE_CAP 64       // Max number of characters in a line
 
 struct Line {
   char type = ' ';          // line type
@@ -200,28 +127,29 @@ struct Document {
   ulong lineCount;
 };
 
-Document document;
+Document* document = nullptr;
 
-#pragma region Markdown File Operations
+#pragma region Mrkdn File Ops
 void initLine(Line& line) {
   line.type = ' ';
   line.len = 0;
   line.text[0] = '\0';
 }
 
-void saveMarkdownFile(const String& path) {}
+void saveMarkdownFile(const String& path) {
+}
 
 void loadMarkdownFile(const String& path) {
   // Initialize document
-  document.lineCount = 1;
+  document->lineCount = 1;
   for (ulong i = 0; i < MAX_LINES; i++) {
-    initLine(document.lines[i]);
+    initLine(document->lines[i]);
   }
 
   // Load file
 }
 
-#pragma region Editor
+#pragma region OLED Editor
 // Helpers
 inline void insertChar(Line& line, uint16_t& cursor, char c) {
   // Ignore if line is full
@@ -460,7 +388,6 @@ int getLineWidthOLED(Line& line) {
   return width;
 }
 
-// OLED Editor
 void toolBar(Line& line, bool bold, bool italic) {
   // FN/SHIFT indicator centered
   u8g2.setFont(u8g2_font_5x7_tf);
@@ -486,6 +413,9 @@ void toolBar(Line& line, bool bold, bool italic) {
   String lineTypeLabel;
 
   switch (currentDocLineType) {
+    case ' ':
+      lineTypeLabel = "ERR";
+      break;
     case 'T':
       lineTypeLabel = "BODY";
       break;
@@ -525,24 +455,28 @@ void toolBar(Line& line, bool bold, bool italic) {
     u8g2.drawStr(0, u8g2.getDisplayHeight(), lineTypeLabel.c_str());
   }
 
-  /*// Bold and italic indicator
-  if (wordObj.bold == true && wordObj.italic == true) {
+  // Bold and italic indicator
+  if (bold == true && italic == true) {
     u8g2.drawStr(u8g2.getDisplayWidth() - u8g2.getStrWidth("BOLD+ITALIC"), u8g2.getDisplayHeight(),
                  "BOLD+ITALIC");
-  } else if (wordObj.bold == true && wordObj.italic == false) {
+  } else if (bold == true && italic == false) {
     u8g2.drawStr(u8g2.getDisplayWidth() - u8g2.getStrWidth("BOLD"), u8g2.getDisplayHeight(),
                  "BOLD");
-  } else if (wordObj.bold == false && wordObj.italic == true) {
+  } else if (bold == false && italic == true) {
     u8g2.drawStr(u8g2.getDisplayWidth() - u8g2.getStrWidth("ITALIC"), u8g2.getDisplayHeight(),
                  "ITALIC");
   } else {
     u8g2.drawStr(u8g2.getDisplayWidth() - u8g2.getStrWidth("NORMAL"), u8g2.getDisplayHeight(),
                  "NORMAL");
-  }*/
+  }
 }
 
+// OLED Editor
 void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
   u8g2.clearBuffer();
+
+  bool currentWordBold = false;
+  bool currentWordItalic = false;
 
   // Draw line text
   if (getLineWidthOLED(line) < (u8g2.getDisplayWidth() - 5)) {
@@ -552,7 +486,7 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
     char temp[2] = {0, '\0'};
     uint16_t i = 0;
 
-    // Fix: Draw cursor at position 0
+    // Draw cursor at position 0
     if (cursor_pos == 0) {
       u8g2.drawVLine(xpos, 1, 22);
     }
@@ -596,9 +530,11 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
       // italics need to overlap a bit
       if (italic && c != '*') xpos -= 3;
 
-      // Draw cursor
+      // Draw cursor and capture word formatting state
       if (cursor_pos == i + 1) {
         u8g2.drawVLine(xpos, 1, 22);
+        currentWordBold = bold;
+        currentWordItalic = italic;
       }
 
       i++;
@@ -615,6 +551,7 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
     bool italic = false;
     char temp[2] = {0, '\0'};
 
+    // This loop evaluates the line exactly up to the cursor position
     for (uint16_t j = 0; j < cursor_pos; j++) {
       char c = line.text[j];
       if (c == '*') {
@@ -647,6 +584,10 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
       // italics need to overlap a bit
       if (italic && c != '*') cursor_pixel_offset -= 3;
     }
+
+    // Capture the state at the end of the pre-computation loop
+    currentWordBold = bold;
+    currentWordItalic = italic;
 
     // 2. Determine horizontal shift to keep cursor centered
     int line_start = 0;
@@ -731,6 +672,10 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
 
   // PROGRESS BAR
   /*
+  progress (px):
+  ((widthUsed % eink.width()) / eink.width()) * oled.width()
+
+
   if (lineHasText(lineObj) == true && pixelsUsed > 0) {
     if (pixelsUsed > display.width() - DISPLAY_WIDTH_BUFFER)
       pixelsUsed = display.width() - DISPLAY_WIDTH_BUFFER;
@@ -776,7 +721,7 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
 
   if (currentlyTyping) {
     // Show toolbar
-    toolBar(currentWord);
+    toolBar(line, currentWordBold, currentWordItalic);
   } else {
     // Show infobar
     OLED().infoBar();
@@ -785,13 +730,311 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
   u8g2.sendBuffer();
 }
 
+#pragma region E-Ink Editor
+// Helpers
+const GFXfont* pickFont(char style, bool bold, bool italic) {
+  FontMap& fm = fonts[fontStyle];  // currently active family
+
+  switch (style) {
+    case '1':  // H1
+      if (bold && italic)
+        return fm.h1_BI;
+      if (bold)
+        return fm.h1_B;
+      if (italic)
+        return fm.h1_I;
+      return fm.h1;
+
+    case '2':  // H2
+      if (bold && italic)
+        return fm.h2_BI;
+      if (bold)
+        return fm.h2_B;
+      if (italic)
+        return fm.h2_I;
+      return fm.h2;
+
+    case '3':  // H3
+      if (bold && italic)
+        return fm.h3_BI;
+      if (bold)
+        return fm.h3_B;
+      if (italic)
+        return fm.h3_I;
+      return fm.h3;
+
+    case '>':  // Quote
+      if (bold && italic)
+        return fm.quote_BI;
+      if (bold)
+        return fm.quote_B;
+      if (italic)
+        return fm.quote_I;
+      return fm.quote;
+
+    case '-':  // List
+      if (bold && italic)
+        return fm.list_BI;
+      if (bold)
+        return fm.list_B;
+      if (italic)
+        return fm.list_I;
+      return fm.list;
+
+    case 'C':  // Code
+      if (bold && italic)
+        return fm.code_BI;
+      if (bold)
+        return fm.code_B;
+      if (italic)
+        return fm.code_I;
+      return fm.code;
+
+    default:  // Normal
+      if (bold && italic)
+        return fm.normal_BI;
+      if (bold)
+        return fm.normal_B;
+      if (italic)
+        return fm.normal_I;
+      return fm.normal;
+  }
+}
+
+uint16_t getLineMaxHeight(Line& line) {
+  bool boldExists = false;
+  bool italicExists = false;
+  bool boldItalicExists = false;
+  const GFXfont* font;
+
+  // Text bounds
+  int16_t x1, y1;
+  uint16_t wpx, hpx;
+
+  // Invalid line
+  if (line.type == ' ') return 0;
+
+  // Check if there is a bold or italic or both in the line based on *
+  for (uint16_t i = 0; i < line.len; i++) {
+    if (line.text[i] == '*') {
+      // count consecutive stars if there isn't a star before
+      if (i == 0 || line.text[i - 1] != '*') {
+        uint8_t starCount = 0;
+        while (i + starCount < line.len && line.text[i + starCount] == '*' && starCount < 3) {
+          starCount++;
+        }
+        
+        if (starCount == 1) italicExists = true;
+        else if (starCount == 2) boldExists = true;
+        else if (starCount == 3) boldItalicExists = true;
+      }
+    }
+  }
+
+  if (boldItalicExists) {
+    // Make all text bold + italic
+    font = pickFont(line.type, true, true);
+  }
+  else if (boldExists) {
+    // Make all text bold
+    font = pickFont(line.type, true, false);
+  } 
+  else if (italicExists) {
+    // Make all text italic
+    font = pickFont(line.type, false, true);
+  }
+  else {
+    // Make all text normal
+    font = pickFont(line.type, false, false);
+  }
+
+  // Measure the height
+  display.setFont(font);
+  display.getTextBounds(line.text, 0, 0, &x1, &y1, &wpx, &hpx);
+  return hpx;
+}
+
+int getCalculatedLineHeight(Line& line) {
+  if (line.type == 'H') return 8;  // Horizontal Rule
+  if (line.type == 'B') return 12; // Blank Line
+
+  int h = getLineMaxHeight(line);
+  
+  // Add appropriate padding
+  if (line.type == '1' || line.type == '2' || line.type == '3') {
+    return h + HEADING_LINE_PADDING;
+  }
+  
+  return h + NORMAL_LINE_PADDING;
+}
+
+int drawLineEink(Line& line, int startX, int startY) {
+  char style = line.type;
+  int cursorY = startY;
+
+  // ---------- Non-Text Rendered Items ---------- //
+  // Horizontal Rules just print a line
+  if (style == 'H') {
+    display.drawFastHLine(0, cursorY + 3, display.width(), GxEPD_BLACK);
+    display.drawFastHLine(0, cursorY + 4, display.width(), GxEPD_BLACK);
+    return 8;
+  }
+  // Blank lines just take up space
+  else if (style == 'B') {
+    return 12;
+  }
+
+  // ---------- Add Padding If Needed ---------- //
+  // Lists and Blockquotes are padded on the left
+  if (style == '>')
+    startX += SPECIAL_PADDING;
+  else if (style == '-' || style == 'L')
+    startX += 2 * SPECIAL_PADDING;
+  // Code blocks are padded on both sides
+  else if (style == 'C')
+    startX += (SPECIAL_PADDING / 2);
+
+  // ---------- Render Text ---------- //
+  bool bold = false;
+  bool italic = false;
+  int xpos = startX;  // Fix: initialize to startX to retain padding
+  char temp[2] = {0, '\0'};
+
+  // Calculate required vertical baseline shift
+  int hpx = getCalculatedLineHeight(line);
+  int baselineY = cursorY + getLineMaxHeight(line); 
+
+  // Fix: Use a for loop so 'continue' doesn't skip the increment
+  for (uint16_t i = 0; i < line.len; i++) {
+    char c = line.text[i];
+
+    if (c == '*') {
+      if (i == 0 || line.text[i - 1] != '*') {
+        uint8_t starCount = 0;
+        while (i + starCount < line.len && line.text[i + starCount] == '*' && starCount < 3)
+          starCount++;
+
+        // toggle style based on number of stars
+        switch (starCount) {
+          case 1:
+            italic = !italic;
+            break;
+          case 2:
+            bold = !bold;
+            break;
+          case 3:
+            bold = !bold;
+            italic = !italic;
+            break;
+        }
+      }
+      // Skip display for stars
+      continue;
+    }
+
+    // Set the font
+    const GFXfont* font = pickFont(style, bold, italic);
+    display.setFont(font);
+
+    // Draw text & add width
+    temp[0] = c;
+    display.setCursor(xpos, baselineY); // Fix: draw at baseline
+    display.print(temp);
+
+    // Add character space
+    int16_t x1, y1;
+    uint16_t charW, charH;
+    display.getTextBounds(temp, 0, 0, &x1, &y1, &charW, &charH);
+    xpos += charW;
+
+    // italics need to overlap a bit
+    // if (italic && c != '*') xpos -= 3;
+  }
+
+  // ---------- Post-Render Formatting ---------- //
+  // Blockquotes get a vertical line on the left
+  if (style == '>') {
+    display.drawFastVLine(SPECIAL_PADDING / 2, startY, hpx, GxEPD_BLACK);
+    display.drawFastVLine((SPECIAL_PADDING / 2) + 1, startY, hpx, GxEPD_BLACK);
+  }
+  // Code Blocks get a vertical line on each side
+  else if (style == 'C') {
+    display.drawFastVLine(SPECIAL_PADDING / 4, startY, hpx, GxEPD_BLACK);
+    display.drawFastVLine(display.width() - (SPECIAL_PADDING / 4), startY, hpx, GxEPD_BLACK);
+    display.drawFastVLine((SPECIAL_PADDING / 4) + 1, startY, hpx, GxEPD_BLACK);
+    display.drawFastVLine(display.width() - (SPECIAL_PADDING / 4) - 1, startY, hpx, GxEPD_BLACK);
+  }
+  // Headings get a horizontal line below them
+  else if ((style == '1' || style == '2' || style == '3')) {
+    display.drawFastHLine(0, startY + hpx - 2, display.width(), GxEPD_BLACK);
+    display.drawFastHLine(0, startY + hpx - 3, display.width(), GxEPD_BLACK);
+  }
+  // Unordered Lists get a '●'
+  else if (style == '-') {
+    display.fillCircle(startX - 8, startY + (hpx / 2), 3, GxEPD_BLACK);
+  }
+  // Ordered Lists get their # (Needs orderedListNumber mapped if retaining feature)
+  else if (style == 'L') {
+    // Requires mapping orderedListNumber to current line
+  }
+
+  return hpx; // Fix: Return consumed height
+}
+
+// E-Ink Editor
+void editorEinkDisplay(Document& doc, uint16_t currentLineNum) {
+  // Scroll up boundary
+  if (currentLineNum < topVisibleLine) {
+    topVisibleLine = currentLineNum;
+  }
+
+  // Scroll down boundary
+  uint16_t j = 0;
+  while (j <= doc.lineCount) {
+    int cursorBottomY = 0;
+    
+    for (uint16_t i = topVisibleLine; i <= currentLineNum; i++) {
+      cursorBottomY += getCalculatedLineHeight(doc.lines[i]);
+    }
+
+    // Current line offscreen, move window and retest
+    if (cursorBottomY > display.height()) {
+      topVisibleLine++;
+    } else {
+      break;
+    }
+
+    // Ensure loop doesn't get stuck
+    j++;
+  }
+
+  // Render the viewport
+  display.fillScreen(GxEPD_WHITE); 
+  
+  int currentY = 0;
+
+  for (uint16_t i = topVisibleLine; i < doc.lineCount; i++) {
+    Line& line = doc.lines[i];
+    
+    // Draw the line
+    int heightUsed = drawLineEink(line, 0, currentY); 
+    
+    currentY += heightUsed;
+
+    // Don't render if offscreen
+    if (currentY >= display.height() + 20) {
+      break;
+    }
+  }
+}
+
 void editor() {
   static uint16_t cursor_pos = 0;
   static int currentMillis = millis();
   static long lastInput = millis();
   bool currentlyTyping = false;
 
-  Line& line = document.lines[currentLineNum];
+  Line& line = document->lines[currentLineNum];
 
   if (currentMillis - KBBounceMillis >= 10) {
     char inchar = KB().updateKeypress();
@@ -804,7 +1047,8 @@ void editor() {
 
     // CR Recieved
     else if (inchar == 13) {
-      cursor_pos = 0;
+      //cursor_pos = 0;
+      updateScreen = true;
     }
 
     // SHIFT Recieved
@@ -1045,6 +1289,15 @@ void TXT_INIT(String inPath) {
   lineScroll = 0;
   updateScreen = true;
   */
+  // Allocate memory for document
+  if (document == nullptr) {
+    document = (Document*)ps_malloc(sizeof(Document));
+    if (document == nullptr) {
+      ESP_LOGE(TAG, "Failed to allocate Document in PSRAM");
+      return;
+    }
+  }
+
   loadMarkdownFile(inPath);
   CurrentAppState = TXT;
   CurrentTXTState_NEW = TXT_;
@@ -1069,13 +1322,11 @@ void TXT_INIT_JournalMode() {
 
 void einkHandler_TXT_NEW() {
   if (updateScreen) {
-    /*updateScreen = false;
+    updateScreen = false;
     display.setFullWindow();
     display.setTextColor(GxEPD_BLACK);
-    display.fillScreen(GxEPD_WHITE);
-    displayDocument();
+    editorEinkDisplay(*document, currentLineNum);
     EINK().refresh();
-    refreshAllLineIndexes();*/
   }
 }
 
