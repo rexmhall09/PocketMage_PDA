@@ -129,6 +129,12 @@ struct Document {
 
 Document document;
 
+void initLine(Line& line) {
+  line.type = ' ';
+  line.len = 0;
+  line.text[0] = '\0';
+}
+
 #pragma region OLED Editor
 // Helpers
 inline void insertChar(Line& line, uint16_t& cursor, char c) {
@@ -820,7 +826,7 @@ uint16_t getLineMaxHeight(Line& line) {
 
 int getCalculatedLineHeight(Line& line) {
   if (line.type == 'H') return 8;  // Horizontal Rule
-  if (line.type == 'B') return 12; // Blank Line
+  if (line.type == 'B') return 8;  // Blank Line
 
   int h = getLineMaxHeight(line);
   
@@ -860,7 +866,7 @@ int drawLineEink(Line& line, int startX, int startY, bool isSelected) {
   }
   // Blank lines just take up space
   else if (style == 'B') {
-    return hpx;
+    return 8;
   }
 
   // ---------- Add Padding If Needed ---------- //
@@ -1026,6 +1032,100 @@ int findWrapIndex(const String& content, char style) {
   return maxLen; // Fits completely within limits
 }
 
+void insertLineArray(ulong index) {
+  if (document.lineCount >= MAX_LINES) return; // Prevent overflow
+  
+  // Shift everything below the index down by 1
+  if (index < document.lineCount) {
+    memmove(&document.lines[index + 1], &document.lines[index], sizeof(Line) * (document.lineCount - index));
+  }
+  
+  // Clear the new line
+  initLine(document.lines[index]);
+  document.lineCount++;
+}
+
+void deleteLineArray(ulong index) {
+  if (index >= document.lineCount) return;
+  
+  // Shift everything below the index up by 1
+  if (index < document.lineCount - 1) {
+    memmove(&document.lines[index], &document.lines[index + 1], sizeof(Line) * (document.lineCount - index - 1));
+  }
+  
+  document.lineCount--;
+}
+
+void reflowParagraph(ulong startLine, uint16_t& activeCursor) {
+  // 1. Identify paragraph boundaries and styles
+  char baseStyle = document.lines[startLine].type;
+  char contStyle = 'T';
+  if (baseStyle == 'U' || baseStyle == 'u') contStyle = 'u';
+  else if (baseStyle == 'O' || baseStyle == 'o') contStyle = 'o';
+  else if (baseStyle == '>') contStyle = '>';
+  else if (baseStyle == 'C') contStyle = 'C';
+  else if (baseStyle == '1' || baseStyle == '2' || baseStyle == '3') contStyle = 'T';
+
+  // 2. Extract all text in this paragraph block
+  String fullText = String(document.lines[startLine].text);
+  ulong endLine = startLine + 1;
+  
+  while (endLine < document.lineCount && document.lines[endLine].type == contStyle) {
+    if (document.lines[endLine].len > 0) {
+      fullText += " " + String(document.lines[endLine].text);
+    }
+    endLine++;
+  }
+  
+  // 3. Keep track of cursor globally relative to the extracted string
+  int absoluteCursor = activeCursor; 
+
+  // 4. Repack the lines
+  ulong currWriteIdx = startLine;
+  String remainingText = fullText;
+  
+  while (remainingText.length() > 0) {
+    char currentStyle = (currWriteIdx == startLine) ? baseStyle : contStyle;
+    int wrapIdx = findWrapIndex(remainingText, currentStyle);
+    
+    String chunk = remainingText.substring(0, wrapIdx);
+    remainingText = remainingText.substring(wrapIdx);
+    remainingText.trim(); // Remove leading spaces for the next line
+    
+    // If we ran out of allocated lines for this paragraph, insert a new one
+    if (currWriteIdx >= endLine) {
+      insertLineArray(currWriteIdx);
+      endLine++;
+    }
+    
+    Line& writeLine = document.lines[currWriteIdx];
+    writeLine.type = currentStyle;
+    strncpy(writeLine.text, chunk.c_str(), LINE_CAP);
+    writeLine.text[LINE_CAP] = '\0';
+    writeLine.len = strlen(writeLine.text);
+    
+    // Track cursor location as it moves between lines
+    if (absoluteCursor != -1) {
+      if (absoluteCursor <= writeLine.len) {
+        currentLineNum = currWriteIdx;
+        activeCursor = absoluteCursor;
+        absoluteCursor = -1; // Found it, stop tracking
+      } else {
+        absoluteCursor -= writeLine.len;
+        if (remainingText.length() > 0) absoluteCursor--; // Account for removed space
+      }
+    }
+    
+    currWriteIdx++;
+  }
+  
+  // 5. Cleanup leftover lines if the paragraph shrank due to backspacing
+  while (currWriteIdx < endLine) {
+    deleteLineArray(currWriteIdx);
+    endLine--;
+  }
+}
+
 // E-Ink Editor
 void editorEinkDisplay(Document& doc, uint16_t currentLineNum) {
   // Scroll up boundary
@@ -1080,96 +1180,101 @@ void editor(char inchar) {
   static long lastInput = millis();
   bool currentlyTyping = false;
 
-  Line& line = document.lines[currentLineNum];
-
   // Prevent memory corruption if scrolling to a shorter line
-  if (cursor_pos > line.len) {
-    cursor_pos = line.len;
+  if (cursor_pos > document.lines[currentLineNum].len) {
+    cursor_pos = document.lines[currentLineNum].len;
   }
 
   // 1. Process Input if a key was pressed
   if (inchar != 0) {
     lastInput = millis();
 
-    // CR Recieved
+    // CR Recieved (ENTER KEY)
     if (inchar == 13) {
-      //cursor_pos = 0;
+      Line& activeLine = document.lines[currentLineNum];
+
+      // 1. Split text at the cursor
+      String leftHalf = String(activeLine.text).substring(0, cursor_pos);
+      String rightHalf = String(activeLine.text).substring(cursor_pos);
+      
+      // Update current line
+      strncpy(activeLine.text, leftHalf.c_str(), LINE_CAP);
+      activeLine.text[LINE_CAP] = '\0';
+      activeLine.len = leftHalf.length();
+
+      // 2. Insert blank line ('B') to create the paragraph break
+      insertLineArray(currentLineNum + 1);
+      document.lines[currentLineNum + 1].type = 'B';
+      
+      // 3. Insert new text line for the right half of the split
+      insertLineArray(currentLineNum + 2);
+      Line& newLine = document.lines[currentLineNum + 2];
+      
+      // Determine style for the new line
+      if (activeLine.type == 'U' || activeLine.type == 'u') newLine.type = 'U'; // Start new bullet
+      else if (activeLine.type == 'O' || activeLine.type == 'o') newLine.type = 'O'; // Start new number
+      else if (activeLine.type == '>') newLine.type = '>';
+      else if (activeLine.type == 'C') newLine.type = 'C';
+      else newLine.type = 'T';
+
+      strncpy(newLine.text, rightHalf.c_str(), LINE_CAP);
+      newLine.text[LINE_CAP] = '\0';
+      newLine.len = rightHalf.length();
+
+      // 4. Move cursor to the new line
+      currentLineNum += 2;
+      cursor_pos = 0;
       updateScreen = true;
+      
+      // Reflow the new line in case the rightHalf was huge
+      reflowParagraph(currentLineNum, cursor_pos);
     }
 
     // SHIFT Recieved
     else if (inchar == 17) {
-      if (KB().getKeyboardState() == SHIFT || KB().getKeyboardState() == FN_SHIFT) {
-        KB().setKeyboardState(NORMAL);
-      } else if (KB().getKeyboardState() == FUNC) {
-        KB().setKeyboardState(FN_SHIFT);
-      } else {
-        KB().setKeyboardState(SHIFT);
-      }
+      if (KB().getKeyboardState() == SHIFT || KB().getKeyboardState() == FN_SHIFT) KB().setKeyboardState(NORMAL);
+      else if (KB().getKeyboardState() == FUNC) KB().setKeyboardState(FN_SHIFT);
+      else KB().setKeyboardState(SHIFT);
     }
 
     // FN Recieved
     else if (inchar == 18) {
-      if (KB().getKeyboardState() == FUNC || KB().getKeyboardState() == FN_SHIFT) {
-        KB().setKeyboardState(NORMAL);
-      } else if (KB().getKeyboardState() == SHIFT) {
-        KB().setKeyboardState(FN_SHIFT);
-      } else {
-        KB().setKeyboardState(FUNC);
-      }
+      if (KB().getKeyboardState() == FUNC || KB().getKeyboardState() == FN_SHIFT) KB().setKeyboardState(NORMAL);
+      else if (KB().getKeyboardState() == SHIFT) KB().setKeyboardState(FN_SHIFT);
+      else KB().setKeyboardState(FUNC);
     }
 
     // BKSP Recieved
     else if (inchar == 8) {
-      deleteChar(line, cursor_pos);
+      deleteChar(document.lines[currentLineNum], cursor_pos);
+      reflowParagraph(currentLineNum, cursor_pos); // Reflow text inwards
     }
 
     // LEFT
     else if (inchar == 19) {
-      if (cursor_pos > 0) {
-        cursor_pos--;
-      }
+      if (cursor_pos > 0) cursor_pos--;
     }
 
     // RIGHT
     else if (inchar == 21) {
-      if (cursor_pos < line.len) {
-        cursor_pos++;
-      }
+      if (cursor_pos < document.lines[currentLineNum].len) cursor_pos++;
     }
 
     // CENTER
-    else if (inchar == 20) {
-    }
+    else if (inchar == 20) {}
 
     // SHIFT+LEFT
     else if (inchar == 28) {
-      // Define the cycle order
-      static const char styleCycle[] = {'T', '1', '2', '3', '>', 'O', 'U', 'C', 'H'};
-      static const int numStyles = sizeof(styleCycle) / sizeof(styleCycle[0]);
-
-      // Find current style index
-      int currentIndex = 0;
-      for (int i = 0; i < numStyles; i++) {
-        if (line.type == styleCycle[i]) {
-          currentIndex = i;
-          break;
-        }
-      }
-
-      // Move to next style in cycle
-      currentIndex = (currentIndex + 1) % numStyles;
-      line.type = styleCycle[currentIndex];
+      cycleLineStyle(document.lines[currentLineNum]);
     }
 
     // SHIFT+RIGHT
     else if (inchar == 30) {
-      cycleTextStyle(line, cursor_pos);
+      cycleTextStyle(document.lines[currentLineNum], cursor_pos);
     }
 
     // SHIFT+CENTER
-    else if (inchar == 29) {
-    }
+    else if (inchar == 29) {}
 
     // FN+LEFT
     else if (inchar == 12) {
@@ -1177,37 +1282,36 @@ void editor(char inchar) {
     }
 
     // FN+RIGHT
-    else if (inchar == 6) {
-    }
+    else if (inchar == 6) {}
 
     // FN+CENTER
-    else if (inchar == 7) {
-    }
+    else if (inchar == 7) {}
 
     // FN+SHIFT+LEFT
     else if (inchar == 24) {
+      cursor_pos = 0;
     }
 
     // FN+SHIFT+RIGHT
     else if (inchar == 26) {
+      cursor_pos = document.lines[currentLineNum].len;
     }
 
     // FN+SHIFT+CENTER
-    else if (inchar == 25) {
-    }
+    else if (inchar == 25) {}
 
     // TAB, SHIFT+TAB / FN+TAB, FN+SHIFT+TAB
-    else if (inchar == 9 || inchar == 14) {
-    }
+    else if (inchar == 9 || inchar == 14) {}
 
     // Normal character input
     else {
-      insertChar(line, cursor_pos, inchar);
+      insertChar(document.lines[currentLineNum], cursor_pos, inchar);
+      
+      // Cascade the paragraph to handle overflow dynamically
+      reflowParagraph(currentLineNum, cursor_pos);
 
       if (inchar < 48 || inchar > 57) {
-        if (KB().getKeyboardState() != NORMAL) {
-          KB().setKeyboardState(NORMAL);
-        }
+        if (KB().getKeyboardState() != NORMAL) KB().setKeyboardState(NORMAL);
       }
     }
   }
@@ -1220,17 +1324,11 @@ void editor(char inchar) {
   unsigned long currentMillis = millis();
   if (currentMillis - OLEDFPSMillis >= (1000 / OLED_MAX_FPS)) {
     OLEDFPSMillis = currentMillis;
-    editorOledDisplay(line, cursor_pos, currentlyTyping);
+    editorOledDisplay(document.lines[currentLineNum], cursor_pos, currentlyTyping);
   }
 }
 
 #pragma region Mrkdn File Ops
-void initLine(Line& line) {
-  line.type = ' ';
-  line.len = 0;
-  line.text[0] = '\0';
-}
-
 void saveMarkdownFile(const String& path) {
 }
 
@@ -1538,8 +1636,10 @@ void processKB_TXT_NEW() {
   char inchar = KB().updateKeypress();
 
   // Check for scrolling independent of keyboard timing
-  if (TOUCH().updateScroll(document.lineCount, currentLineNum)) {
-    updateScreen = true;
+  if (CurrentTXTState_NEW == TXT_ || CurrentTXTState_NEW == JOURNAL_MODE) {
+    if (TOUCH().updateScroll(document.lineCount, currentLineNum)) {
+      updateScreen = true;
+    }
   }
 
   // Route the input to the current state
