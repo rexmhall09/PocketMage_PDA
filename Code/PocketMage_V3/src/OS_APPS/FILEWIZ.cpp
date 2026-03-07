@@ -214,7 +214,7 @@ String renderWizMini(String folder, int8_t scrollDelta) {
   return cachedFiles[scroll].address;
 }
 
-String fileWizardMini(bool allowRecentSelect, String rootDir) {
+String fileWizardMini(bool allowRecentSelect, String rootDir, char inchar_) {
   pocketmage::setCpuSpeed(240);
 
   int8_t scrollDelta = 0;
@@ -232,8 +232,10 @@ String fileWizardMini(bool allowRecentSelect, String rootDir) {
 
   // Handle Inputs
   int currentMillis = millis();
-  if (currentMillis - KBBounceMillis >= KB_COOLDOWN) {  
-    char inchar = KB().updateKeypress();
+  if (currentMillis - KBBounceMillis >= KB_COOLDOWN) {
+    char inchar;
+    if (inchar_ == 0) inchar = KB().updateKeypress();
+    else inchar = inchar_;
 
     // HANDLE INPUTS
     if (inchar == 0);

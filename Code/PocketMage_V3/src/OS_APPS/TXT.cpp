@@ -1098,6 +1098,452 @@ void toolBar(Line& line, bool bold, bool italic) {
   }
 }
 
+void displayScrollPreviewOLED(Document& doc, ulong activeCursorLine) {
+  u8g2.clearBuffer();
+  u8g2.setDrawColor(1);
+
+  int startX = 0; 
+  int cursorY = 0;
+  int specialPadding = 8; // px
+  
+  // 1. Dynamic Viewport: Keep active cursor near the top/middle of the OLED
+  ulong displayTop = 0;
+  if (activeCursorLine > 3) {
+    displayTop = activeCursorLine - 3;
+  }
+
+  // Draw Vertical Separator at x=76
+  u8g2.drawVLine(76, 0, u8g2.getDisplayHeight());
+
+  // 2. Draw Minimap on the left (0 to 74)
+  for (ulong i = displayTop; i < doc.lineCount; i++) {
+    if (cursorY > u8g2.getDisplayHeight()) break; // Off screen
+
+    Line& line = doc.lines[i];
+    char style = line.type;
+    int padX = startX;
+
+    // Find height and padding for this line
+    int max_hpx = 2;
+    switch (style) {
+      case '1': max_hpx = 5; break;
+      case '2': max_hpx = 4; break;
+      case '3': max_hpx = 3; break;
+      case 'T': max_hpx = 2; break;
+      case 'C': max_hpx = 2; padX += (specialPadding / 2); break;
+      case '>': max_hpx = 2; padX += specialPadding; break;
+      case 'U': 
+      case 'u': 
+      case 'O': 
+      case 'o': 
+        max_hpx = 2; 
+        padX += specialPadding; 
+        break;
+      case 'H': 
+        // Horizontal Rules just print a line
+        if (cursorY > 0) {
+          u8g2.drawHLine(startX, cursorY, 74);
+          cursorY += 3;
+        }
+        continue;
+      case 'B': 
+        // Blank Lines just take up space
+        cursorY += 4; 
+        continue; 
+      default: 
+        max_hpx = 2; 
+        break;
+    }
+
+    // Fast Width Approximation bounded to the left pane
+    uint16_t boxWidth = map(line.len, 0, LINE_CAP, 0, 72 - padX);
+    if (boxWidth == 0 && line.len > 0) boxWidth = 2; // Minimum visible blip
+
+    // Draw Line Box
+    u8g2.drawBox(padX + 2, cursorY, boxWidth, max_hpx);
+
+    // Draw Style Decorations
+    if (style == '>') {
+      u8g2.drawVLine(startX + (specialPadding / 2), cursorY, max_hpx);
+    } 
+    else if (style == 'C') {
+      u8g2.drawVLine(startX + (specialPadding / 4) - 1, cursorY, max_hpx);
+      u8g2.drawVLine(padX + 2 + boxWidth + 2, cursorY, max_hpx);
+    } 
+    else if (style == '1' || style == '2' || style == '3') {
+      bool isLast = true;
+      if (i < doc.lineCount - 1 && doc.lines[i+1].type == style) {
+         isLast = false; 
+      }
+      if (isLast && (cursorY + max_hpx + 1) < u8g2.getDisplayHeight()) {
+        u8g2.drawHLine(startX, cursorY + max_hpx + 1, 74);
+      }
+    } 
+    else if (style == 'U') {
+      u8g2.drawHLine(startX + specialPadding - 3, cursorY + (max_hpx / 2), 2);
+    } 
+    else if (style == 'O') {
+      u8g2.drawVLine(startX + specialPadding - 3, cursorY, 2);
+      u8g2.drawPixel(startX + specialPadding - 1, cursorY + 1);
+    }
+
+    // Draw Selection Indicator tracking the active line
+    if (i == activeCursorLine) {
+      u8g2.drawFrame(padX, cursorY - 1, boxWidth + 4, max_hpx + 2);
+      // Draw left-pointing triangle on the separator wall
+      u8g2.drawTriangle(74, cursorY-3, 74, cursorY + 3, 70, cursorY); 
+    }
+
+    // Move down for next line
+    cursorY += max_hpx + 2; 
+    if (style == '1' || style == '2' || style == '3') cursorY += 2; // Extra padding
+  }
+
+  // 3. Draw Text Info on the Right Pane (78 to 128)
+  Line& activeLine = doc.lines[activeCursorLine];
+  String typeLabel = "";
+  
+  switch (activeLine.type) {
+    case '1': typeLabel = "H1"; break;
+    case '2': typeLabel = "H2"; break;
+    case '3': typeLabel = "H3"; break;
+    case '>': typeLabel = "QUOTE"; break;
+    case 'C': typeLabel = "CODE"; break;
+    case 'U': 
+    case 'u': typeLabel = "U LIST"; break;
+    case 'O': 
+    case 'o': typeLabel = "O LIST"; break;
+    case 'H': typeLabel = "H RULE"; break;
+    case 'B': typeLabel = "BLANK"; break;
+    case ' ': typeLabel = "ERR"; break;
+    default:  typeLabel = "BODY"; break;
+  }
+
+  u8g2.setFont(u8g2_font_5x7_tf);
+  
+  // Print Line Number
+  String lineStr = "L: " + String(activeCursorLine);
+  u8g2.drawStr(80, 7, lineStr.c_str());
+  
+  // Print Line Type
+  u8g2.drawStr(u8g2.getDisplayWidth() - u8g2.getStrWidth(typeLabel.c_str()), 7, typeLabel.c_str());
+  
+  // Draw a horizontal line under the header info
+  u8g2.drawHLine(78, 10, u8g2.getDisplayWidth()-78);
+
+  // Print Full Text Preview (Single line, extending offscreen)
+  u8g2.setFont(u8g2_font_lubR18_tf);
+
+  if (activeLine.len > 0) {
+    int prevCursorX = 80;
+    int rightEdge = u8g2.getDisplayWidth(); 
+    char tChar[2] = {0, '\0'};
+    
+    for (int j = 0; j < activeLine.len; j++) {
+      char c = activeLine.text[j];
+      
+      // Skip formatting stars so they don't clog up the preview
+      if (c == '*') continue; 
+      
+      tChar[0] = c;
+      int charWidth = u8g2.getStrWidth(tChar);
+      
+      // If adding this char goes past the screen, stop drawing to save cycles
+      if (prevCursorX > rightEdge) {
+        break; 
+      }
+      
+      // Draw character
+      u8g2.drawStr(prevCursorX, u8g2.getDisplayHeight(), tChar);
+      prevCursorX += charWidth;
+    }
+  }
+
+  u8g2.sendBuffer();
+}
+
+#pragma region Mrkdn File Ops
+void saveMarkdownFile(const String& path) {
+  if (PM_SDAUTO().getNoSD()) {
+    OLED().oledWord("SAVE FAILED - No SD!");
+    delay(3000);
+    return;
+  }
+
+  SDActive = true;
+  pocketmage::setCpuSpeed(240); // Boost clock for SD operation
+  delay(50);
+
+  // Determine save path
+  String savePath = path;
+  if (savePath == "" || savePath == "-")
+    savePath = "/temp.txt";
+  if (!savePath.startsWith("/"))
+    savePath = "/" + savePath;
+
+  File file = global_fs->open(savePath.c_str(), FILE_WRITE);
+  if (!file) {
+    OLED().oledWord("SAVE FAILED - OPEN ERR");
+    delay(2000);
+    ESP_LOGE("SD", "Failed to open file for writing: %s", savePath.c_str());
+    SDActive = false;
+    if (SAVE_POWER) pocketmage::setCpuSpeed(80);
+    return;
+  }
+
+  for (ulong i = 0; i < document.lineCount; i++) {
+    Line& line = document.lines[i];
+    
+    // Determine if this line is a word-wrap continuation of the previous line
+    bool isContinuation = false;
+    if (i > 0) {
+      char pType = document.lines[i-1].type;
+      if (line.type == 'T' && pType == 'T') isContinuation = true;
+      else if (line.type == 'u' && (pType == 'U' || pType == 'u')) isContinuation = true;
+      else if (line.type == 'o' && (pType == 'O' || pType == 'o')) isContinuation = true;
+      else if (line.type == '1' && pType == '1') isContinuation = true;
+      else if (line.type == '2' && pType == '2') isContinuation = true;
+      else if (line.type == '3' && pType == '3') isContinuation = true;
+      else if (line.type == '>' && pType == '>') isContinuation = true;
+      else if (line.type == 'C' && pType == 'C') isContinuation = true;
+    }
+
+    // If it is NOT a continuation, we must close the previous line and start a new Markdown block
+    if (!isContinuation) {
+      // Close the previous line with a newline (and closing backtick if it was code)
+      if (i > 0) {
+        if (document.lines[i-1].type == 'C') file.print("`");
+        file.println();
+      }
+
+      // Print the Markdown prefix for the new line
+      switch (line.type) {
+        case '1': file.print("# "); break;
+        case '2': file.print("## "); break;
+        case '3': file.print("### "); break;
+        case '>': file.print("> "); break;
+        case 'U': file.print("- "); break;
+        case 'O': file.print("1. "); break;
+        case 'C': file.print("`"); break;
+        case 'H': file.print("---"); break;
+        default: break; // 'T', 'B', 'u', 'o' have no prefix
+      }
+    } else {
+      // It is a continuation line. 
+      // Re-inject a space to re-join the wrapped words correctly.
+      file.print(" ");
+    }
+
+    // Print the actual text
+    if (line.len > 0) {
+      file.print(line.text);
+    }
+  }
+
+  // Close the very last line in the document
+  if (document.lineCount > 0) {
+    if (document.lines[document.lineCount - 1].type == 'C') file.print("`");
+    file.println();
+  }
+
+  file.close();
+
+  // Save metadata
+  PM_SDAUTO().writeMetadata(savePath);
+  PM_SDAUTO().setEditingFile(savePath);
+
+  OLED().oledWord("Saved: " + savePath);
+  delay(1000);
+
+  if (SAVE_POWER) pocketmage::setCpuSpeed(80); // Return to power save
+  SDActive = false;
+}
+
+void loadMarkdownFile(const String& path) {
+  pocketmage::setCpuSpeed(240);
+
+  // Invalid file
+  if (path == "" || path == " " || path == "-") {
+    OLED().oledWord("No file saved! Creating blank file.");
+    delay(2000);
+
+    document.lineCount = 1;
+    initLine(document.lines[0]);
+    document.lines[0].type = 'T';
+    currentLineNum = 0;
+    return;
+  }
+
+  if (PM_SDAUTO().getNoSD()) {
+    OLED().oledWord("LOAD FAILED - No SD!");
+    delay(5000);
+    return;
+  }
+
+  delay(50);
+
+  File file = global_fs->open(path.c_str(), FILE_READ);
+  if (!file) {
+    ESP_LOGE("SD", "File does not exist: %s", path.c_str());
+    OLED().oledWord("LOAD FAILED - FILE MISSING");
+    delay(2000);
+
+    document.lineCount = 1;
+    initLine(document.lines[0]);
+    document.lines[0].type = 'T';
+    currentLineNum = 0;
+    return;
+  }
+
+  // Initialize document
+  document.lineCount = 0;
+  for (ulong i = 0; i < MAX_LINES; i++) {
+    initLine(document.lines[i]);
+  }
+
+  while (file.available() && document.lineCount < MAX_LINES) {
+    String line = file.readStringUntil('\n');
+    line.trim();
+    char style = 'T';
+    String content = line;  // default is full line
+
+    // Parse Markdown Prefix
+    if (line.length() == 0) {
+      style = 'B'; // Blank line
+      content = "";
+    } else if (line.startsWith("### ")) {
+      style = '3'; // Heading 3
+      content = line.substring(4);  
+    } else if (line.startsWith("## ")) {
+      style = '2'; // Heading 2
+      content = line.substring(3);  
+    } else if (line.startsWith("# ")) {
+      style = '1'; // Heading 1
+      content = line.substring(2);  
+    } else if (line.startsWith("> ")) {
+      style = '>'; // Quote Block
+      content = line.substring(2);  
+    } else if (line.startsWith("- ")) {
+      style = 'U'; 
+      content = line.substring(2); 
+    } else if (line == "---") {
+      style = 'H'; // Horizontal Rule
+      content = "";  
+    } else if ((line.startsWith("```")) || (line.startsWith("`") && line.endsWith("`")) || (line.startsWith("```") && line.endsWith("```"))) {
+      if (line.startsWith("```"))
+        content = line.substring(3);
+      else if (line.startsWith("```") && line.endsWith("```"))
+        content = line.substring(3, line.length() - 3);
+      else if (line.startsWith("`") && line.endsWith("`"))
+        content = line.substring(1, line.length() - 1);
+
+      style = 'C'; // Code Block
+    } else if (line.length() > 2 && isDigit(line.charAt(0)) && line.charAt(1) == '.' && line.charAt(2) == ' ') {
+      style = 'O'; 
+      content = line.substring(3); 
+    }
+
+    // Split content if it exceeds pixel bounds OR the fixed array LINE_CAP bounds
+    while (content.length() > 0 && document.lineCount < MAX_LINES) {
+      int splitIndex = findWrapIndex(content, style);
+
+      String chunk = content.substring(0, splitIndex);
+      content = content.substring(splitIndex);
+      content.trim(); // remove leading space from remainder
+
+      Line& docLine = document.lines[document.lineCount];
+      docLine.type = style;
+      strncpy(docLine.text, chunk.c_str(), LINE_CAP);
+      docLine.text[LINE_CAP] = '\0';
+      docLine.len = strlen(docLine.text);
+      
+      document.lineCount++;
+      
+      // --- Setup style for the continuation line ---
+      if (content.length() > 0) {
+        if (style == 'U') style = 'u';
+        else if (style == 'O') style = 'o';
+        // Removed the rule that downgrades '1', '2', '3' to 'T'. 
+        // Headers will now retain their style across word wraps.
+      }
+    }
+    
+    // Catch empty lines (like parsed 'B' or 'H') that bypassed the length split loop
+    if (content.length() == 0 && (style == 'B' || style == 'H') && document.lineCount < MAX_LINES) {
+        Line& docLine = document.lines[document.lineCount];
+        docLine.type = style;
+        docLine.text[0] = '\0';
+        docLine.len = 0;
+        document.lineCount++;
+    }
+  }
+
+  file.close();
+
+  if (document.lineCount == 0) {
+    document.lineCount = 1;
+    initLine(document.lines[0]);
+    document.lines[0].type = 'T';
+    currentLineNum = 0;
+  } else {
+    currentLineNum = document.lineCount - 1;
+  }
+
+  if (SAVE_POWER)
+    pocketmage::setCpuSpeed(80);
+  SDActive = false;
+
+  OLED().oledWord("FILE LOADED");
+  delay(500);
+}
+
+void newMarkdownFile(const String& path) {
+  if (PM_SDAUTO().getNoSD()) {
+    OLED().oledWord("CREATE FAILED - No SD!");
+    delay(3000);
+    return;
+  }
+
+  SDActive = true;
+  pocketmage::setCpuSpeed(240); // Boost clock for SD operation
+  delay(50);
+
+  // Sanitize path
+  String savePath = path;
+  if (savePath == "" || savePath == "-") savePath = "/notes/untitled.txt";
+  if (!savePath.startsWith("/")) savePath = "/" + savePath;
+
+  // Create an empty file
+  File file = global_fs->open(savePath.c_str(), FILE_WRITE);
+  if (!file) {
+    OLED().oledWord("CREATE FAILED");
+    delay(2000);
+    ESP_LOGE("SD", "Failed to create file: %s", savePath.c_str());
+    SDActive = false;
+    if (SAVE_POWER) pocketmage::setCpuSpeed(80);
+    return;
+  }
+  file.close(); // Close immediately to leave it blank
+
+  // Save metadata and update the system's active editing file
+  PM_SDAUTO().writeMetadata(savePath);
+  PM_SDAUTO().setEditingFile(savePath);
+
+  OLED().oledWord("Created File");
+  delay(1000);
+
+  // Load the newly created blank file into the editor memory
+  loadMarkdownFile(savePath);
+  
+  // Reset scrolling and cursor variables
+  currentLineNum = 0;
+  topVisibleLine = 0;
+  updateScreen = true;
+
+  if (SAVE_POWER) pocketmage::setCpuSpeed(80); // Return to power save
+  SDActive = false;
+}
+
 #pragma region OLED Editor
 // OLED Editor
 void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
@@ -1533,19 +1979,54 @@ void editor(char inchar) {
       cycleTextStyle(document.lines[currentLineNum], cursor_pos);
     }
 
-    // SHIFT+CENTER
-    else if (inchar == 29) {}
-
-    // FN+LEFT
-    else if (inchar == 12) {
-      HOME_INIT();
+    // SHIFT+CENTER (New File)
+    else if (inchar == 29) {
+      if (CurrentTXTState_NEW != JOURNAL_MODE) {
+        CurrentTXTState_NEW = NEW_FILE;
+        KB().setKeyboardState(NORMAL);
+      }
     }
 
-    // FN+RIGHT
-    else if (inchar == 6) {}
+    // FN+LEFT (Home)
+    else if (inchar == 12) {
+      if (CurrentTXTState_NEW != JOURNAL_MODE) {
+        HOME_INIT();
+      } else {
+        JOURNAL_INIT(); 
+      }
+    }
 
-    // FN+CENTER
-    else if (inchar == 7) {}
+    // FN+RIGHT (Save File)
+    else if (inchar == 6) {
+      if (CurrentTXTState_NEW != JOURNAL_MODE) {
+        String savePath = PM_SDAUTO().getEditingFile();
+        if (savePath == "" || savePath == "-" || savePath == "/temp.txt") {
+          KB().setKeyboardState(NORMAL);
+          CurrentTXTState_NEW = SAVE_AS;
+        } else {
+          if (!savePath.startsWith("/")) savePath = "/" + savePath;
+          saveMarkdownFile(savePath);
+        }
+      } else {
+        // Journal save
+        String savePath = getCurrentJournal();
+        if (!savePath.startsWith("/")) savePath = "/" + savePath;
+        saveMarkdownFile(savePath);
+      }
+    }
+
+    // FN+CENTER (Load File)
+    else if (inchar == 7) {
+      if (CurrentTXTState_NEW != JOURNAL_MODE) {
+        CurrentTXTState_NEW = LOAD_FILE;
+        KB().setKeyboardState(NORMAL);
+      } else {
+        // Journal load
+        String outPath = getCurrentJournal();
+        if (!outPath.startsWith("/")) outPath = "/" + outPath;
+        loadMarkdownFile(outPath);
+      }
+    }
 
     // FN+SHIFT+LEFT
     else if (inchar == 24) {
@@ -1593,6 +2074,11 @@ void editor(char inchar) {
     else {
       ulong preReflowLine = currentLineNum; // Capture state
       
+      // Automatically convert 'ERR' (uninitialized) lines to Body text
+      if (document.lines[currentLineNum].type == ' ' || document.lines[currentLineNum].type == 'B') {
+        document.lines[currentLineNum].type = 'T';
+      }
+
       insertChar(document.lines[currentLineNum], cursor_pos, inchar);
       
       // Cascade the paragraph to handle overflow dynamically
@@ -1609,7 +2095,7 @@ void editor(char inchar) {
     }
   }
 
-  // --- NEW: Debounce Timer for Style Cycling ---
+  // --- Debounce Timer for Style Cycling ---
   if (pendingStyleRefresh && (millis() - lastStyleCycleMillis > 1000)) {
     updateScreen = true;
     pendingStyleRefresh = false;
@@ -1623,150 +2109,17 @@ void editor(char inchar) {
   unsigned long currentMillis = millis();
   if (currentMillis - OLEDFPSMillis >= (1000 / OLED_MAX_FPS)) {
     OLEDFPSMillis = currentMillis;
-    editorOledDisplay(document.lines[currentLineNum], cursor_pos, currentlyTyping);
-  }
-}
-
-#pragma region Mrkdn File Ops
-void saveMarkdownFile(const String& path) {
-}
-
-void loadMarkdownFile(const String& path) {
-  pocketmage::setCpuSpeed(240);
-
-  // Invalid file
-  if (path == "" || path == " " || path == "-") {
-    OLED().oledWord("No file saved! Creating blank file.");
-    delay(2000);
-
-    document.lineCount = 1;
-    initLine(document.lines[0]);
-    document.lines[0].type = 'T';
-    currentLineNum = 0;
-    return;
-  }
-
-  if (PM_SDAUTO().getNoSD()) {
-    OLED().oledWord("LOAD FAILED - No SD!");
-    delay(5000);
-    return;
-  }
-
-  delay(50);
-
-  File file = global_fs->open(path.c_str(), FILE_READ);
-  if (!file) {
-    ESP_LOGE("SD", "File does not exist: %s", path.c_str());
-    OLED().oledWord("LOAD FAILED - FILE MISSING");
-    delay(2000);
-
-    document.lineCount = 1;
-    initLine(document.lines[0]);
-    document.lines[0].type = 'T';
-    currentLineNum = 0;
-    return;
-  }
-
-  // Initialize document
-  document.lineCount = 0;
-  for (ulong i = 0; i < MAX_LINES; i++) {
-    initLine(document.lines[i]);
-  }
-
-  while (file.available() && document.lineCount < MAX_LINES) {
-    String line = file.readStringUntil('\n');
-    line.trim();
-    char style = 'T';
-    String content = line;  // default is full line
-
-    // Parse Markdown Prefix
-    if (line.length() == 0) {
-      style = 'B'; // Blank line
-      content = "";
-    } else if (line.startsWith("### ")) {
-      style = '3'; // Heading 3
-      content = line.substring(4);  
-    } else if (line.startsWith("## ")) {
-      style = '2'; // Heading 2
-      content = line.substring(3);  
-    } else if (line.startsWith("# ")) {
-      style = '1'; // Heading 1
-      content = line.substring(2);  
-    } else if (line.startsWith("> ")) {
-      style = '>'; // Quote Block
-      content = line.substring(2);  
-    } else if (line.startsWith("- ")) {
-      style = 'U'; 
-      content = line.substring(2); 
-    } else if (line == "---") {
-      style = 'H'; // Horizontal Rule
-      content = "---";  
-    } else if ((line.startsWith("```")) || (line.startsWith("`") && line.endsWith("`")) || (line.startsWith("```") && line.endsWith("```"))) {
-      if (line.startsWith("```"))
-        content = line.substring(3);
-      else if (line.startsWith("```") && line.endsWith("```"))
-        content = line.substring(3, line.length() - 3);
-      else if (line.startsWith("`") && line.endsWith("`"))
-        content = line.substring(1, line.length() - 1);
-
-      style = 'C'; // Code Block
-    } else if (line.length() > 2 && isDigit(line.charAt(0)) && line.charAt(1) == '.' && line.charAt(2) == ' ') {
-      style = 'O'; 
-      content = line.substring(3); 
-    }
-
-    // Split content if it exceeds pixel bounds OR the fixed array LINE_CAP bounds
-    while (content.length() > 0 && document.lineCount < MAX_LINES) {
-      int splitIndex = findWrapIndex(content, style);
-
-      String chunk = content.substring(0, splitIndex);
-      content = content.substring(splitIndex);
-      content.trim(); // remove leading space from remainder
-
-      Line& docLine = document.lines[document.lineCount];
-      docLine.type = style;
-      strncpy(docLine.text, chunk.c_str(), LINE_CAP);
-      docLine.text[LINE_CAP] = '\0';
-      docLine.len = strlen(docLine.text);
-      
-      document.lineCount++;
-      
-      // --- Setup style for the continuation line ---
-      if (content.length() > 0) {
-        if (style == 'U') style = 'u';
-        else if (style == 'O') style = 'o';
-        // Removed the rule that downgrades '1', '2', '3' to 'T'. 
-        // Headers will now retain their style across word wraps.
-      }
-    }
     
-    // Catch empty lines (like parsed 'B' or 'H') that bypassed the length split loop
-    if (content.length() == 0 && (style == 'B' || style == 'H') && document.lineCount < MAX_LINES) {
-        Line& docLine = document.lines[document.lineCount];
-        docLine.type = style;
-        docLine.text[0] = '\0';
-        docLine.len = 0;
-        document.lineCount++;
+    // Exactly matches your old code logic
+    if (TOUCH().getLastTouch() == -1) {
+      // Flush KB IC if not in use (optional, from your old code)
+      if (!currentlyTyping) keypad.flush(); 
+      
+      editorOledDisplay(document.lines[currentLineNum], cursor_pos, currentlyTyping);
+    } else {
+      displayScrollPreviewOLED(document, currentLineNum);
     }
   }
-
-  file.close();
-
-  if (document.lineCount == 0) {
-    document.lineCount = 1;
-    initLine(document.lines[0]);
-    document.lines[0].type = 'T';
-    currentLineNum = 0;
-  } else {
-    currentLineNum = document.lineCount - 1;
-  }
-
-  if (SAVE_POWER)
-    pocketmage::setCpuSpeed(80);
-  SDActive = false;
-
-  OLED().oledWord("FILE LOADED");
-  delay(500);
 }
 
 
@@ -1930,14 +2283,18 @@ void einkHandler_TXT_NEW() {
 void processKB_TXT_NEW() {
   OLED().setPowerSave(false);
   disableTimeout = false;
+  
+  // Temporary input buffer for filenames (SAVE_AS, NEW_FILE)
+  static String inputBuffer = "";
 
   // Read input ONCE per loop
   char inchar = KB().updateKeypress();
+  unsigned long currentMillis = millis();
 
   // Check for scrolling independent of keyboard timing
   if (CurrentTXTState_NEW == TXT_ || CurrentTXTState_NEW == JOURNAL_MODE) {
     if (TOUCH().updateScroll(document.lineCount, currentLineNum)) {
-      updateScreen = true;
+      updateScreen = true; // Instantly trigger E-ink update on scroll
     }
   }
 
@@ -1945,152 +2302,145 @@ void processKB_TXT_NEW() {
   switch (CurrentTXTState_NEW) {
     case TXT_:
     case JOURNAL_MODE:
-      editor(inchar); // Pass the captured input
+      editor(inchar);
       break;
+
     case SAVE_AS:
-      /*inchar = KB().updateKeypress();
       if (currentMillis - KBBounceMillis >= KB_COOLDOWN) {
-        // HANDLE INPUTS
-        //No char recieved
-        if (inchar == 0);
-        //CR Recieved
+        if (inchar == 0) {
+          // Do nothing
+        }
+        // CR Recieved (ENTER)
         else if (inchar == 13) {
-          if (currentLine != "" && currentLine != "-") {
-            if (!currentLine.startsWith("/notes/")) currentLine = "/notes/" + currentLine;
-            if (!currentLine.endsWith(".txt")) currentLine = currentLine + ".txt";
-            saveMarkdownFile(currentLine);
+          if (inputBuffer != "" && inputBuffer != "-") {
+            if (!inputBuffer.startsWith("/notes/")) inputBuffer = "/notes/" + inputBuffer;
+            if (!inputBuffer.endsWith(".txt") && !inputBuffer.endsWith(".md")) inputBuffer = inputBuffer + ".txt";
+            saveMarkdownFile(inputBuffer);
             CurrentTXTState_NEW = TXT_;
           } else {
             OLED().oledWord("Invalid Name");
             delay(2000);
           }
-
-          currentLine = "";
+          inputBuffer = "";
         }
         // SHIFT Recieved
         else if (inchar == 17) {
-          if (KB().getKeyboardState() == SHIFT || KB().getKeyboardState() == FN_SHIFT) {
-            KB().setKeyboardState(NORMAL);
-          } else if (KB().getKeyboardState() == FUNC) {
-            KB().setKeyboardState(FN_SHIFT);
-          } else {
-            KB().setKeyboardState(SHIFT);
-          }
+          if (KB().getKeyboardState() == SHIFT || KB().getKeyboardState() == FN_SHIFT) KB().setKeyboardState(NORMAL);
+          else if (KB().getKeyboardState() == FUNC) KB().setKeyboardState(FN_SHIFT);
+          else KB().setKeyboardState(SHIFT);
         }
         // FN Recieved
         else if (inchar == 18) {
-          if (KB().getKeyboardState() == FUNC || KB().getKeyboardState() == FN_SHIFT) {
-            KB().setKeyboardState(NORMAL);
-          } else if (KB().getKeyboardState() == SHIFT) {
-            KB().setKeyboardState(FN_SHIFT);
-          } else {
-            KB().setKeyboardState(FUNC);
-          }
+          if (KB().getKeyboardState() == FUNC || KB().getKeyboardState() == FN_SHIFT) KB().setKeyboardState(NORMAL);
+          else if (KB().getKeyboardState() == SHIFT) KB().setKeyboardState(FN_SHIFT);
+          else KB().setKeyboardState(FUNC);
         }
-        //Space Recieved
+        // Space Recieved
         else if (inchar == 32) {
           // Spaces not allowed in filenames
         }
-        //ESC / CLEAR Recieved
+        // ESC / CLEAR Recieved
         else if (inchar == 20) {
-          currentLine = "";
+          inputBuffer = "";
         }
-        //BKSP Recieved
+        // BKSP Recieved
         else if (inchar == 8) {
-          if (currentLine.length() > 0) {
-            currentLine.remove(currentLine.length() - 1);
+          if (inputBuffer.length() > 0) {
+            inputBuffer.remove(inputBuffer.length() - 1);
           }
         }
         // Home recieved
         else if (inchar == 12) {
           CurrentTXTState_NEW = TXT_;
         }
+        // Normal Character
         else {
-          currentLine += inchar;
-          if (inchar >= 48 && inchar <= 57) {}  //Only leave FN on if typing numbers
+          inputBuffer += inchar;
+          if (inchar >= 48 && inchar <= 57) {}  // Only leave FN on if typing numbers
           else if (KB().getKeyboardState() != NORMAL) {
             KB().setKeyboardState(NORMAL);
           }
         }
 
-        currentMillis = millis();
-        //Make sure oled only updates at OLED_MAX_FPS
-        if (currentMillis - OLEDFPSMillis >= (1000/OLED_MAX_FPS)) {
+        // Render OLED for text input
+        if (currentMillis - OLEDFPSMillis >= (1000 / OLED_MAX_FPS)) {
           OLEDFPSMillis = currentMillis;
-          OLED().oledLine(currentLine, currentLine.length(), false, "Input Filename");
+          OLED().oledLine(inputBuffer, inputBuffer.length(), false, "Input Filename");
         }
-      }*/
+      }
       break;
+
     case NEW_FILE:
-      /*inchar = KB().updateKeypress();
       if (currentMillis - KBBounceMillis >= KB_COOLDOWN) {
-        // HANDLE INPUTS
-        //No char recieved
-        if (inchar == 0);
-        //CR Recieved
+        if (inchar == 0) {
+          // Do nothing
+        }
+        // CR Recieved (ENTER)
         else if (inchar == 13) {
-          if (currentLine != "" && currentLine != "-") {
-            if (!currentLine.startsWith("/notes/")) currentLine = "/notes/" + currentLine;
-            if (!currentLine.endsWith(".txt")) currentLine = currentLine + ".txt";
-            newMarkdownFile(currentLine);
+          if (inputBuffer != "" && inputBuffer != "-") {
+            if (!inputBuffer.startsWith("/notes/")) inputBuffer = "/notes/" + inputBuffer;
+            if (!inputBuffer.endsWith(".txt") && !inputBuffer.endsWith(".md")) inputBuffer = inputBuffer + ".txt";
+            newMarkdownFile(inputBuffer);
             CurrentTXTState_NEW = TXT_;
+            updateScreen = true;
           } else {
             OLED().oledWord("Invalid Name");
             delay(2000);
           }
-
-          currentLine = "";
+          inputBuffer = "";
         }
-        //SHIFT Recieved
+        // SHIFT Recieved
         else if (inchar == 17) {
-          if (KB().getKeyboardState() == SHIFT) KB().setKeyboardState(NORMAL);
+          if (KB().getKeyboardState() == SHIFT || KB().getKeyboardState() == FN_SHIFT) KB().setKeyboardState(NORMAL);
+          else if (KB().getKeyboardState() == FUNC) KB().setKeyboardState(FN_SHIFT);
           else KB().setKeyboardState(SHIFT);
         }
-        //FN Recieved
+        // FN Recieved
         else if (inchar == 18) {
-          if (KB().getKeyboardState() == FUNC) KB().setKeyboardState(NORMAL);
+          if (KB().getKeyboardState() == FUNC || KB().getKeyboardState() == FN_SHIFT) KB().setKeyboardState(NORMAL);
+          else if (KB().getKeyboardState() == SHIFT) KB().setKeyboardState(FN_SHIFT);
           else KB().setKeyboardState(FUNC);
         }
-        //Space Recieved
+        // Space Recieved
         else if (inchar == 32) {
           // Spaces not allowed in filenames
         }
-        //ESC / CLEAR Recieved
+        // ESC / CLEAR Recieved
         else if (inchar == 20) {
-          currentLine = "";
+          inputBuffer = "";
         }
-        //BKSP Recieved
+        // BKSP Recieved
         else if (inchar == 8) {
-          if (currentLine.length() > 0) {
-            currentLine.remove(currentLine.length() - 1);
+          if (inputBuffer.length() > 0) {
+            inputBuffer.remove(inputBuffer.length() - 1);
           }
         }
         // Home recieved
         else if (inchar == 12) {
           CurrentTXTState_NEW = TXT_;
         }
+        // Normal Character
         else {
-          currentLine += inchar;
-          if (inchar >= 48 && inchar <= 57) {}  //Only leave FN on if typing numbers
+          inputBuffer += inchar;
+          if (inchar >= 48 && inchar <= 57) {}  // Only leave FN on if typing numbers
           else if (KB().getKeyboardState() != NORMAL) {
             KB().setKeyboardState(NORMAL);
           }
         }
 
-        currentMillis = millis();
-        //Make sure oled only updates at OLED_MAX_FPS
-        if (currentMillis - OLEDFPSMillis >= (1000/OLED_MAX_FPS)) {
+        // Render OLED for text input
+        if (currentMillis - OLEDFPSMillis >= (1000 / OLED_MAX_FPS)) {
           OLEDFPSMillis = currentMillis;
-          OLED().oledLine(currentLine, currentLine.length(), false, "Input Name for New File");
+          OLED().oledLine(inputBuffer, inputBuffer.length(), false, "Name New File");
         }
-      }*/
+      }
       break;
+
     case LOAD_FILE:
-      /*outPath = fileWizardMini(false, "/notes");
+      String outPath = fileWizardMini(false, "/notes", inchar);
       if (outPath == "_EXIT_") {
         // Return to TXT
         CurrentTXTState_NEW = TXT_;
-        //newState = true;
         break;
       }
       else if (outPath != "") {
@@ -2106,8 +2456,9 @@ void processKB_TXT_NEW() {
           delay(2000);
           CurrentTXTState_NEW = TXT_;
         }
-      }*/
+      }
       break;
   }
 }
+
 #endif

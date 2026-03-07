@@ -75,7 +75,7 @@ void processKB();
 void FILEWIZ_INIT();
 void processKB_FILEWIZ();
 void einkHandler_FILEWIZ();
-String fileWizardMini(bool allowRecentSelect = false, String rootDir = "/");
+String fileWizardMini(bool allowRecentSelect = false, String rootDir = "/", char inchar_ = 0);
 
 // <TXT.cpp>
 void TXT_INIT(String inPath = "");
