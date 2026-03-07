@@ -263,8 +263,18 @@ int drawLineEink(Document& doc, ulong lineIndex, int startX, int startY, bool is
   int cursorY = startY;
 
   // Determine colors based on selection
-  uint16_t fgColor = isSelected ? GxEPD_WHITE : GxEPD_BLACK;
-  uint16_t bgColor = isSelected ? GxEPD_BLACK : GxEPD_WHITE;
+  uint16_t fgColor;
+  uint16_t bgColor;
+
+  if (style == 'B') {
+    fgColor = GxEPD_BLACK;
+    bgColor = GxEPD_WHITE;
+  }
+  else {
+    fgColor = isSelected ? GxEPD_WHITE : GxEPD_BLACK;
+    bgColor = isSelected ? GxEPD_BLACK : GxEPD_WHITE;
+  }
+
 
   // Calculate height first so we can draw the background
   int hpx = getCalculatedLineHeight(line);
