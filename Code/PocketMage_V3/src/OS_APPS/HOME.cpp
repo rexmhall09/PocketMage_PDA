@@ -17,6 +17,8 @@ long lastInput = 0;
 static int cursor_pos = 0;
 
 void HOME_INIT() {
+  display.setTextColor(GxEPD_BLACK);
+  display.setRotation(1);
   CurrentAppState = HOME;
   currentLine     = "";
   KB().setKeyboardState(NORMAL);
