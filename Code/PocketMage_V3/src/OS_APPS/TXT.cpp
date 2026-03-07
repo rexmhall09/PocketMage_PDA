@@ -2237,7 +2237,6 @@ void TXT_INIT(String inPath) {
 }
 
 void TXT_INIT_JournalMode() {
-  /*
   initFonts();
 
   String outPath = getCurrentJournal();
@@ -2246,11 +2245,9 @@ void TXT_INIT_JournalMode() {
 
   setFontStyle(serif);
 
-  lineScroll = 0;
   updateScreen = true;
   CurrentAppState = TXT;
   CurrentTXTState_NEW = JOURNAL_MODE;
-  */
 }
 
 #pragma region Loops
