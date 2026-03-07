@@ -1174,11 +1174,11 @@ void displayScrollPreviewOLED(Document& doc, ulong activeCursorLine) {
 
     // Draw Style Decorations
     if (style == '>') {
-      u8g2.drawVLine(startX + (specialPadding / 2), cursorY, max_hpx);
+      u8g2.drawVLine(startX + (specialPadding / 2), cursorY, max_hpx+1);
     } 
     else if (style == 'C') {
-      u8g2.drawVLine(startX + (specialPadding / 4) - 1, cursorY, max_hpx);
-      u8g2.drawVLine(padX + 2 + boxWidth + 2, cursorY, max_hpx);
+      u8g2.drawVLine(startX + (specialPadding / 4) - 1, cursorY, max_hpx+1);
+      u8g2.drawVLine(padX + 2 + boxWidth + 2, cursorY, max_hpx+1);
     } 
     else if (style == '1' || style == '2' || style == '3') {
       bool isLast = true;
@@ -1369,32 +1369,34 @@ void saveMarkdownFile(const String& path) {
   SDActive = false;
 }
 
-void loadMarkdownFile(const String& path) {
+bool loadMarkdownFile(const String& path) {
   pocketmage::setCpuSpeed(240);
 
   // Invalid file
   if (path == "" || path == " " || path == "-") {
-    OLED().oledWord("No file saved! Creating blank file.");
-    delay(2000);
+    return false;
+    /*OLED().oledWord("Creating new file.");
+    delay(500);
 
     document.lineCount = 1;
     initLine(document.lines[0]);
     document.lines[0].type = 'T';
     currentLineNum = 0;
-    return;
+    return;*/
   }
 
   if (PM_SDAUTO().getNoSD()) {
     OLED().oledWord("LOAD FAILED - No SD!");
     delay(5000);
-    return;
+    return false;
   }
 
   delay(50);
 
   File file = global_fs->open(path.c_str(), FILE_READ);
   if (!file) {
-    ESP_LOGE("SD", "File does not exist: %s", path.c_str());
+    return false;
+    /*ESP_LOGE("SD", "File does not exist: %s", path.c_str());
     OLED().oledWord("LOAD FAILED - FILE MISSING");
     delay(2000);
 
@@ -1402,7 +1404,7 @@ void loadMarkdownFile(const String& path) {
     initLine(document.lines[0]);
     document.lines[0].type = 'T';
     currentLineNum = 0;
-    return;
+    return;*/
   }
 
   // Initialize document
@@ -1505,6 +1507,8 @@ void loadMarkdownFile(const String& path) {
 
   OLED().oledWord("FILE LOADED");
   delay(500);
+
+  return true;
 }
 
 void newMarkdownFile(const String& path) {
@@ -1755,18 +1759,13 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
   }
 
   // PROGRESS BAR
-  /*
-  progress (px):
-  ((widthUsed % eink.width()) / eink.width()) * oled.width()
+  //progress (px):
+  //((widthUsed % eink.width()) / eink.width()) * oled.width()
 
 
-  if (lineHasText(lineObj) == true && pixelsUsed > 0) {
-    if (pixelsUsed > display.width() - DISPLAY_WIDTH_BUFFER)
-      pixelsUsed = display.width() - DISPLAY_WIDTH_BUFFER;
-    // uint8_t progress = map(pixelsUsed, 0, display.width() - DISPLAY_WIDTH_BUFFER, 0,
-    // u8g2.getDisplayWidth());
-    uint8_t progress = map(min(pixelsUsed, display.width() - DISPLAY_WIDTH_BUFFER), 0,
-                           display.width() - DISPLAY_WIDTH_BUFFER, 0, u8g2.getDisplayWidth() - 1);
+  /*if (line.len > 0) {
+    int total_pixel_width = getLineWidthOLED(line);
+    int progress = ((total_pixel_width % display.width()) / display.width()) * u8g2.getDisplayWidth();
 
     u8g2.drawVLine(u8g2.getDisplayWidth(), 0, 2);
     u8g2.drawVLine(0, 0, 2);
@@ -1783,25 +1782,7 @@ void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
         u8g2.drawLine(u8g2.getDisplayWidth() - 1, 15, u8g2.getDisplayWidth() - 4, 18);
       }
     }
-    // New line on space animation
-    if (pixelsUsed >= display.width() - DISPLAY_WIDTH_BUFFER) {
-      // Sawtooth animation
-      uint period = 8000;
-      uint x1 = map(millis() % period, 0, period, 0, u8g2.getDisplayWidth());
-      uint x2 = map((millis() + period / 4) % period, 0, period, 0, u8g2.getDisplayWidth());
-      uint x3 = map((millis() + period / 2) % period, 0, period, 0, u8g2.getDisplayWidth());
-      uint x4 = map((millis() + (3 * period) / 4) % period, 0, period, 0, u8g2.getDisplayWidth());
-
-      // Draw scrolling box
-      u8g2.setDrawColor(0);
-      u8g2.drawBox(x1, 0, 10, 2);
-      u8g2.drawBox(x2, 0, 10, 2);
-      u8g2.drawBox(x3, 0, 10, 2);
-      u8g2.drawBox(x4, 0, 10, 2);
-      u8g2.setDrawColor(1);
-    }
-  }
-  */
+  }*/
 
   if (currentlyTyping) {
     // Show toolbar
@@ -1947,7 +1928,7 @@ void editor(char inchar) {
           updateScreen = true;
         }
       } else {
-        mergeLinesUp(currentLineNum, cursor_pos);    // Pull paragraph up
+        mergeLinesUp(currentLineNum, cursor_pos);
       }
     }
 
@@ -2082,19 +2063,16 @@ void editor(char inchar) {
 
     // Normal character input
     else {
-      ulong preReflowLine = currentLineNum; // Capture state
+      ulong preReflowLine = currentLineNum;
       
-      // Automatically convert 'ERR' (uninitialized) lines to Body text
       if (document.lines[currentLineNum].type == ' ' || document.lines[currentLineNum].type == 'B') {
         document.lines[currentLineNum].type = 'T';
       }
 
       insertChar(document.lines[currentLineNum], cursor_pos, inchar);
       
-      // Cascade the paragraph to handle overflow dynamically
       reflowParagraph(currentLineNum, cursor_pos);
 
-      // Trigger E-ink update if word-wrap pushed the cursor down a line
       if (currentLineNum != preReflowLine) {
         updateScreen = true;
       }
@@ -2105,26 +2083,24 @@ void editor(char inchar) {
     }
   }
 
-  // --- Debounce Timer for Style Cycling ---
+  // Debounce Timer for Style Cycling
   if (pendingStyleRefresh && (millis() - lastStyleCycleMillis > 1000)) {
     updateScreen = true;
     pendingStyleRefresh = false;
   }
 
-  // 2. Determine Toolbar State
+  // Determine Toolbar State
   if (millis() - lastInput > IDLE_TIME) currentlyTyping = false;
   else currentlyTyping = true;
 
-  // 3. Render OLED
+  // Render OLED
   unsigned long currentMillis = millis();
   if (currentMillis - OLEDFPSMillis >= (1000 / OLED_MAX_FPS)) {
     OLEDFPSMillis = currentMillis;
     
-    // Exactly matches your old code logic
     if (TOUCH().getLastTouch() == -1) {
-      // Flush KB IC if not in use (optional, from your old code)
       if (!currentlyTyping) keypad.flush(); 
-      
+      lastInput = millis();
       editorOledDisplay(document.lines[currentLineNum], cursor_pos, currentlyTyping);
     } else {
       displayScrollPreviewOLED(document, currentLineNum);
@@ -2245,20 +2221,19 @@ void initFonts() {
 }
 
 void TXT_INIT(String inPath) {
-  /*
-  if (inPath == "") loadMarkdownFile(PM_SDAUTO().getEditingFile());
-  else {
-    PM_SDAUTO().setEditingFile(inPath);
-    loadMarkdownFile(inPath);
-  }
-
-  */
   initFonts();
   setFontStyle(serif);
-  loadMarkdownFile(/*inPath*/ "/notes/test.txt");
-  CurrentAppState = TXT;
-  CurrentTXTState_NEW = TXT_;
-  updateScreen = true;
+  bool fileLoaded = loadMarkdownFile(inPath);
+  if (fileLoaded) {
+    CurrentAppState = TXT;
+    CurrentTXTState_NEW = TXT_;
+    updateScreen = true;
+  } else {
+    CurrentAppState = TXT;
+    CurrentTXTState_NEW = LOAD_FILE;
+    updateScreen = true;
+  }
+  
 }
 
 void TXT_INIT_JournalMode() {
