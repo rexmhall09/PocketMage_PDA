@@ -1272,6 +1272,25 @@ void displayScrollPreviewOLED(Document& doc, ulong activeCursorLine) {
   u8g2.sendBuffer();
 }
 
+bool isFolderEmpty(const char* dirPath) {
+  if (!global_fs) return true;
+  
+  File dir = global_fs->open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    return true; // Folder doesn't exist or failed to open
+  }
+
+  File file = dir.openNextFile();
+  while (file) {
+    if (!file.isDirectory()) {
+      return false; // Found at least one file
+    }
+    file = dir.openNextFile();
+  }
+  
+  return true; // Folder is completely empty (or only contains empty subfolders)
+}
+
 #pragma region Mrkdn File Ops
 void saveMarkdownFile(const String& path) {
   if (PM_SDAUTO().getNoSD()) {
@@ -1524,7 +1543,7 @@ void newMarkdownFile(const String& path) {
 
   // Sanitize path
   String savePath = path;
-  if (savePath == "" || savePath == "-") savePath = "/notes/untitled.txt";
+  if (savePath == "" || savePath == "-") savePath = "/notes/temp.txt";
   if (!savePath.startsWith("/")) savePath = "/" + savePath;
 
   // Create an empty file
@@ -2225,6 +2244,12 @@ void TXT_INIT(String inPath) {
   setFontStyle(serif);
   bool fileLoaded = loadMarkdownFile(inPath);
   if (fileLoaded) {
+    CurrentAppState = TXT;
+    CurrentTXTState_NEW = TXT_;
+    updateScreen = true;
+  } else if (isFolderEmpty("/notes")){
+    // /notes is empty, make a blank file
+    newMarkdownFile("/notes/temp.txt");
     CurrentAppState = TXT;
     CurrentTXTState_NEW = TXT_;
     updateScreen = true;
