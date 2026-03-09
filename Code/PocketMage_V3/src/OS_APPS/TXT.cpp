@@ -2010,7 +2010,7 @@ void editor(char inchar) {
     else if (inchar == 6) {
       if (CurrentTXTState_NEW != JOURNAL_MODE) {
         String savePath = PM_SDAUTO().getEditingFile();
-        if (savePath == "" || savePath == "-" || savePath == "/temp.txt") {
+        if (savePath == "" || savePath == "-" || savePath == "/notes/temp.txt") {
           KB().setKeyboardState(NORMAL);
           CurrentTXTState_NEW = SAVE_AS;
         } else {
