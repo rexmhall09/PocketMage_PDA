@@ -392,6 +392,7 @@ void einkHandler_JOURNAL() {
       if (newState) {
         newState = false;
 
+        display.fillScreen(GxEPD_WHITE);
         drawJMENU();
 
         EINK().multiPassRefresh(2);
