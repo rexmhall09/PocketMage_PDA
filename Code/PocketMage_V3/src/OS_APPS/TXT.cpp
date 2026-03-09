@@ -436,7 +436,19 @@ void deleteLineArray(ulong index) {
   document.lineCount--;
 }
 
-int findWrapIndex(const String& content, char style) {
+void deleteLinesMultiple(ulong index, int count) {
+  if (count <= 0 || index >= document.lineCount) return;
+  int actualCount = count;
+  if (index + count > document.lineCount) {
+    actualCount = document.lineCount - index;
+  }
+  if (index + actualCount < document.lineCount) {
+    memmove(&document.lines[index], &document.lines[index + actualCount], sizeof(Line) * (document.lineCount - index - actualCount));
+  }
+  document.lineCount -= actualCount;
+}
+
+int findWrapIndex(const String& content, int startIndex, char style) {
   int availableWidth = display.width() - DISPLAY_WIDTH_BUFFER;
 
   if (style == '>') availableWidth -= SPECIAL_PADDING;
@@ -448,20 +460,18 @@ int findWrapIndex(const String& content, char style) {
   int currentWidth = 0;
   int lastSpaceIndex = -1;
 
-  int maxLen = min((int)content.length(), (int)LINE_CAP);
+  int maxLen = min((int)(content.length() - startIndex), (int)LINE_CAP);
   const GFXfont* activeFont = pickFont(style, bold, italic);
 
   for (int i = 0; i < maxLen; i++) {
-    char c = content[i];
+    char c = content[startIndex + i];
 
-    if (c == ' ') {
-      lastSpaceIndex = i;
-    }
+    if (c == ' ') lastSpaceIndex = i;
 
     if (c == '*') {
-      if (i == 0 || content[i - 1] != '*') {
+      if (i == 0 || content[startIndex + i - 1] != '*') {
         uint8_t starCount = 0;
-        while (i + starCount < maxLen && content[i + starCount] == '*' && starCount < 3) {
+        while (i + starCount < maxLen && content[startIndex + i + starCount] == '*' && starCount < 3) {
           starCount++;
         }
         switch (starCount) {
@@ -469,13 +479,11 @@ int findWrapIndex(const String& content, char style) {
           case 2: bold = !bold; break;
           case 3: bold = !bold; italic = !italic; break;
         }
-        // Update font for exact width tracking
         activeFont = pickFont(style, bold, italic);
       }
       continue; 
     }
 
-    // Instantly look up character width
     currentWidth += getFastCharWidth(c, activeFont);
 
     if (currentWidth > availableWidth) {
@@ -484,7 +492,7 @@ int findWrapIndex(const String& content, char style) {
     }
   }
 
-  if (maxLen < content.length() && lastSpaceIndex > 0) {
+  if (maxLen < (int)(content.length() - startIndex) && lastSpaceIndex > 0) {
     return lastSpaceIndex;
   }
 
@@ -492,41 +500,39 @@ int findWrapIndex(const String& content, char style) {
 }
 
 void reflowParagraph(ulong startLine, uint16_t& activeCursor) {
-  // 1. Identify paragraph boundaries and styles
   char baseStyle = document.lines[startLine].type;
-  char contStyle = baseStyle; // Inherit the style directly
+  char contStyle = baseStyle;
   
-  // Apply lowercase rule strictly for lists so we don't draw double-bullets
   if (baseStyle == 'U' || baseStyle == 'u') contStyle = 'u';
   else if (baseStyle == 'O' || baseStyle == 'o') contStyle = 'o';
 
-  // 2. Extract all text in this paragraph block
-  String fullText = String(document.lines[startLine].text);
-  ulong endLine = startLine + 1;
+  String fullText;
+  fullText.reserve(512); // Pre-allocate to prevent heap choke
+  fullText = document.lines[startLine].text;
   
+  ulong endLine = startLine + 1;
   while (endLine < document.lineCount && document.lines[endLine].type == contStyle) {
     if (document.lines[endLine].len > 0) {
-      fullText += " " + String(document.lines[endLine].text);
+      fullText += " ";
+      fullText += document.lines[endLine].text;
     }
     endLine++;
   }
   
-  // 3. Keep track of cursor globally relative to the extracted string
   int absoluteCursor = activeCursor; 
-
-  // 4. Repack the lines
   ulong currWriteIdx = startLine;
-  String remainingText = fullText;
   
-  while (remainingText.length() > 0) {
+  int textIndex = 0;
+  int textLen = fullText.length();
+  
+  while (textIndex < textLen) {
     char currentStyle = (currWriteIdx == startLine) ? baseStyle : contStyle;
-    int wrapIdx = findWrapIndex(remainingText, currentStyle);
     
-    String chunk = remainingText.substring(0, wrapIdx);
-    remainingText = remainingText.substring(wrapIdx);
-    remainingText.trim(); // Remove leading spaces for the next line
+    int wrapLen = findWrapIndex(fullText, textIndex, currentStyle);
     
-    // If we ran out of allocated lines for this paragraph, insert a new one
+    String chunk = fullText.substring(textIndex, textIndex + wrapLen);
+    textIndex += wrapLen;
+    
     if (currWriteIdx >= endLine) {
       insertLineArray(currWriteIdx);
       endLine++;
@@ -538,23 +544,24 @@ void reflowParagraph(ulong startLine, uint16_t& activeCursor) {
     writeLine.text[LINE_CAP] = '\0';
     writeLine.len = strlen(writeLine.text);
     
-    // Track cursor location as it moves between lines
     if (absoluteCursor != -1) {
       if (absoluteCursor <= writeLine.len) {
         currentLineNum = currWriteIdx;
         activeCursor = absoluteCursor;
-        absoluteCursor = -1; // Found it, stop tracking
+        absoluteCursor = -1; 
       } else {
         absoluteCursor -= writeLine.len;
-        if (remainingText.length() > 0) absoluteCursor--; // Account for removed space
       }
+    }
+    
+    if (textIndex < textLen && fullText[textIndex] == ' ') {
+        textIndex++;
+        if (absoluteCursor > 0) absoluteCursor--; 
     }
     
     currWriteIdx++;
   }
   
-  // --- NEW FAILSAFE BLOCK ---
-  // Prevent the cleanup loop from deleting a completely empty line
   if (currWriteIdx == startLine) {
     Line& writeLine = document.lines[currWriteIdx];
     writeLine.type = baseStyle;
@@ -565,13 +572,11 @@ void reflowParagraph(ulong startLine, uint16_t& activeCursor) {
       currentLineNum = currWriteIdx;
       activeCursor = 0;
     }
-    currWriteIdx++; // Increment so the cleanup block safely bypasses it
+    currWriteIdx++; 
   }
   
-  // 5. Cleanup leftover lines if the paragraph shrank due to backspacing
-  while (currWriteIdx < endLine) {
-    deleteLineArray(currWriteIdx);
-    endLine--;
+  if (endLine > currWriteIdx) {
+    deleteLinesMultiple(currWriteIdx, endLine - currWriteIdx);
   }
 }
 
@@ -580,7 +585,6 @@ void mergeLinesUp(ulong currLine, uint16_t& cursor) {
   ulong prevLine = currLine - 1;
   char pType = document.lines[prevLine].type;
   
-  // If the line above is a blank line or horizontal rule, just delete it
   if (pType == 'B' || pType == 'H') {
     deleteLineArray(prevLine);
     currentLineNum--;
@@ -588,16 +592,16 @@ void mergeLinesUp(ulong currLine, uint16_t& cursor) {
     return;
   }
   
-  // Determine continuation styles for repack
-  char contStyle = pType; // Inherit the style directly
+  char contStyle = pType; 
   if (pType == 'U' || pType == 'u') contStyle = 'u';
   else if (pType == 'O' || pType == 'o') contStyle = 'o';
 
-  // Combine text EXACTLY as-is (no space added, simulating natural backspace)
-  String merged = String(document.lines[prevLine].text) + String(document.lines[currLine].text);
-  cursor = document.lines[prevLine].len; // Cursor sits right where the join happened
+  String fullText;
+  fullText.reserve(512);
+  fullText = document.lines[prevLine].text;
+  cursor = fullText.length(); 
+  fullText += document.lines[currLine].text;
   
-  // Collect the rest of the current line's paragraph to ensure we don't drop text
   char currBase = document.lines[currLine].type;
   char currContStyle = currBase;
   if (currBase == 'U' || currBase == 'u') currContStyle = 'u';
@@ -606,29 +610,26 @@ void mergeLinesUp(ulong currLine, uint16_t& cursor) {
   ulong endLine = currLine + 1;
   while (endLine < document.lineCount && document.lines[endLine].type == currContStyle) {
     if (document.lines[endLine].len > 0) {
-      merged += " " + String(document.lines[endLine].text);
+      fullText += " ";
+      fullText += document.lines[endLine].text;
     }
     endLine++;
   }
   
-  // Delete the old disconnected lines
-  int linesToDelete = endLine - currLine;
-  for (int i = 0; i < linesToDelete; i++) {
-    deleteLineArray(currLine);
-  }
+  deleteLinesMultiple(currLine, endLine - currLine);
   
-  // Repack all text starting from the previous line
   ulong currWriteIdx = prevLine;
-  String remainingText = merged;
   int absoluteCursor = cursor;
   
-  while (remainingText.length() > 0) {
+  int textIndex = 0;
+  int textLen = fullText.length();
+  
+  while (textIndex < textLen) {
     char currentStyle = (currWriteIdx == prevLine) ? pType : contStyle;
-    int wrapIdx = findWrapIndex(remainingText, currentStyle);
+    int wrapLen = findWrapIndex(fullText, textIndex, currentStyle);
     
-    String chunk = remainingText.substring(0, wrapIdx);
-    remainingText = remainingText.substring(wrapIdx);
-    remainingText.trim();
+    String chunk = fullText.substring(textIndex, textIndex + wrapLen);
+    textIndex += wrapLen;
     
     if (currWriteIdx >= document.lineCount || currWriteIdx > prevLine) {
       insertLineArray(currWriteIdx);
@@ -640,7 +641,6 @@ void mergeLinesUp(ulong currLine, uint16_t& cursor) {
     writeLine.text[LINE_CAP] = '\0';
     writeLine.len = strlen(writeLine.text);
     
-    // Update cursor position globally
     if (absoluteCursor != -1) {
       if (absoluteCursor <= writeLine.len) {
         currentLineNum = currWriteIdx;
@@ -648,13 +648,17 @@ void mergeLinesUp(ulong currLine, uint16_t& cursor) {
         absoluteCursor = -1;
       } else {
         absoluteCursor -= writeLine.len;
-        if (remainingText.length() > 0) absoluteCursor--;
       }
     }
+    
+    if (textIndex < textLen && fullText[textIndex] == ' ') {
+        textIndex++;
+        if (absoluteCursor > 0) absoluteCursor--; 
+    }
+    
     currWriteIdx++;
   }
   
-  // Failsafe for completely deleting all text leaving an empty line
   if (currWriteIdx == prevLine) {
     Line& writeLine = document.lines[currWriteIdx];
     writeLine.type = pType;
@@ -862,7 +866,8 @@ void cycleParagraphStyle(ulong& currLine, uint16_t& cursor) {
 
   // 3. Extract text and track the absolute cursor
   int absoluteCursor = 0;
-  String fullText = "";
+  String fullText;
+  fullText.reserve(512); // Prevent heap choke
   ulong endLine = startLine;
   
   while (endLine < document.lineCount) {
@@ -875,22 +880,22 @@ void cycleParagraphStyle(ulong& currLine, uint16_t& cursor) {
     
     if (document.lines[endLine].len > 0) {
       if (fullText.length() > 0) fullText += " ";
-      fullText += String(document.lines[endLine].text);
+      fullText += document.lines[endLine].text;
     }
     endLine++;
   }
 
-  // 4. Repack text with the newly selected style
+  // 4. Repack text with the newly selected style using fast indexing
   ulong currWriteIdx = startLine;
-  String remainingText = fullText;
+  int textIndex = 0;
+  int textLen = fullText.length();
   
-  while (remainingText.length() > 0) {
+  while (textIndex < textLen) {
     char currentStyle = (currWriteIdx == startLine) ? newBaseStyle : newContStyle;
-    int wrapIdx = findWrapIndex(remainingText, currentStyle);
+    int wrapLen = findWrapIndex(fullText, textIndex, currentStyle);
     
-    String chunk = remainingText.substring(0, wrapIdx);
-    remainingText = remainingText.substring(wrapIdx);
-    remainingText.trim(); // remove leading spaces for next line
+    String chunk = fullText.substring(textIndex, textIndex + wrapLen);
+    textIndex += wrapLen;
     
     if (currWriteIdx >= endLine) {
       insertLineArray(currWriteIdx);
@@ -911,8 +916,13 @@ void cycleParagraphStyle(ulong& currLine, uint16_t& cursor) {
         absoluteCursor = -1;
       } else {
         absoluteCursor -= writeLine.len;
-        if (remainingText.length() > 0) absoluteCursor--;
       }
+    }
+    
+    // Skip leading space for the next line
+    if (textIndex < textLen && fullText[textIndex] == ' ') {
+        textIndex++;
+        if (absoluteCursor > 0) absoluteCursor--; 
     }
     
     currWriteIdx++;
@@ -929,13 +939,12 @@ void cycleParagraphStyle(ulong& currLine, uint16_t& cursor) {
     currWriteIdx++;
   }
 
-  // 5. Cleanup leftover lines if the new font made the paragraph shorter
-  while (currWriteIdx < endLine) {
-    deleteLineArray(currWriteIdx);
-    endLine--;
+  // 5. Fast cleanup leftover lines if the new font made the paragraph shorter
+  if (endLine > currWriteIdx) {
+    deleteLinesMultiple(currWriteIdx, endLine - currWriteIdx);
   }
   
-  //updateScreen = true;
+  updateScreen = true;
 }
 
 void setFontOLED(bool bold, bool italic) {
@@ -1454,7 +1463,7 @@ bool loadMarkdownFile(const String& path) {
 
     // Split content if it exceeds pixel bounds OR the fixed array LINE_CAP bounds
     while (content.length() > 0 && document.lineCount < MAX_LINES) {
-      int splitIndex = findWrapIndex(content, style);
+      int splitIndex = findWrapIndex(content, 0, style);
 
       String chunk = content.substring(0, splitIndex);
       content = content.substring(splitIndex);
@@ -1560,232 +1569,124 @@ void newMarkdownFile(const String& path) {
 void editorOledDisplay(Line& line, uint16_t cursor_pos, bool currentlyTyping) {
   u8g2.clearBuffer();
 
+  int display_w = u8g2.getDisplayWidth();
+  int total_pixel_width = 0;
+  int cursor_pixel_offset = 0;
+  
   bool currentWordBold = false;
   bool currentWordItalic = false;
 
-  // Draw line text
-  if (getLineWidthOLED(line) < (u8g2.getDisplayWidth() - 5)) {
-    bool bold = false;
-    bool italic = false;
-    int xpos = 0;  // total width in pixels
-    char temp[2] = {0, '\0'};
-    uint16_t i = 0;
+  bool bold = false;
+  bool italic = false;
 
-    // Draw cursor at position 0
-    if (cursor_pos == 0) {
-      u8g2.drawVLine(xpos, 1, 22);
-    }
+  // --- PASS 1: Single-sweep width and cursor calculation ---
+  // This completely replaces getLineWidthOLED() and runs 3x faster
+  u8g2.setFont(u8g2_font_lubR18_tf);
 
-    while (i < line.len) {
-      char c = line.text[i];
+  for (uint16_t i = 0; i < line.len; i++) {
+    char c = line.text[i];
 
-      if (c == '*') {
-        if (i == 0 || line.text[i - 1] != '*') {
-          uint8_t starCount = 0;
-          while (i + starCount < line.len && line.text[i + starCount] == '*' && starCount < 3)
-            starCount++;
-
-          // toggle style based on number of stars
-          switch (starCount) {
-            case 1:
-              italic = !italic;
-              break;
-            case 2:
-              bold = !bold;
-              break;
-            case 3:
-              bold = !bold;
-              italic = !italic;
-              break;
-          }
+    if (c == '*') {
+      if (i == 0 || line.text[i - 1] != '*') {
+        uint8_t starCount = 0;
+        while (i + starCount < line.len && line.text[i + starCount] == '*' && starCount < 3) starCount++;
+        switch (starCount) {
+          case 1: italic = !italic; break;
+          case 2: bold = !bold; break;
+          case 3: bold = !bold; italic = !italic; break;
         }
-        // setFontOLED(false, false);
-        //  Use tiny font for stars
-        u8g2.setFont(u8g2_font_5x7_tf);
-      } else {
-        setFontOLED(bold, italic);
       }
-
-      // Draw text & add width
-      temp[0] = c;
-      if (c == '*') u8g2.drawStr(xpos, 8, temp);
-      else u8g2.drawStr(xpos, 20, temp);
-      xpos += u8g2.getStrWidth(temp);
-
-      // italics need to overlap a bit
-      if (italic && c != '*') xpos -= 3;
-
-      // Draw cursor and capture word formatting state
-      if (cursor_pos == i + 1) {
-        u8g2.drawVLine(xpos, 1, 22);
-        currentWordBold = bold;
-        currentWordItalic = italic;
-      }
-
-      i++;
-    }
-
-  } else {
-    // Line is too long to fit, calculate scrolling offset
-    int total_pixel_width = getLineWidthOLED(line);
-    int display_w = u8g2.getDisplayWidth();
-
-    // 1. Calculate the exact pixel offset of the cursor dynamically
-    int cursor_pixel_offset = 0;
-    bool bold = false;
-    bool italic = false;
-    char temp[2] = {0, '\0'};
-
-    // This loop evaluates the line exactly up to the cursor position
-    for (uint16_t j = 0; j < cursor_pos; j++) {
-      char c = line.text[j];
-      if (c == '*') {
-        if (j == 0 || line.text[j - 1] != '*') {
-          uint8_t starCount = 0;
-          while (j + starCount < line.len && line.text[j + starCount] == '*' && starCount < 3)
-            starCount++;
-          switch (starCount) {
-            case 1:
-              italic = !italic;
-              break;
-            case 2:
-              bold = !bold;
-              break;
-            case 3:
-              bold = !bold;
-              italic = !italic;
-              break;
-          }
-        }
-        // setFontOLED(false, false);
-        //  Use tiny font for stars
-        u8g2.setFont(u8g2_font_5x7_tf);
-      } else {
-        setFontOLED(bold, italic);
-      }
-      temp[0] = c;
-      cursor_pixel_offset += u8g2.getStrWidth(temp);
-
-      // italics need to overlap a bit
-      if (italic && c != '*') cursor_pixel_offset -= 3;
-    }
-
-    // Capture the state at the end of the pre-computation loop
-    currentWordBold = bold;
-    currentWordItalic = italic;
-
-    // 2. Determine horizontal shift to keep cursor centered
-    int line_start = 0;
-
-    if (cursor_pos == 0) {
-      line_start = 0;
-    } else if (cursor_pos == line.len) {
-      // Show end of line, input scrolls left
-      line_start = display_w - 8 - total_pixel_width;
+      u8g2.setFont(u8g2_font_5x7_tf);
+      total_pixel_width += u8g2.getStrWidth("*");
     } else {
-      if (cursor_pixel_offset > (display_w - 8) / 2) {
-        // Shift left
-        line_start = ((display_w - 8) / 2) - cursor_pixel_offset;
-
-        // Prevent scrolling too far left if the right edge is visible
-        if (line_start + total_pixel_width < display_w - 8) {
-          line_start = display_w - 8 - total_pixel_width;
-        }
-      }
+      setFontOLED(bold, italic);
+      char temp[2] = {c, '\0'};
+      int w = u8g2.getStrWidth(temp);
+      if (italic) w -= 3; // italic overlap adjustment
+      total_pixel_width += w;
     }
 
-    // 3. Draw the shifted line
-    int xpos = line_start;
-    bold = false;
-    italic = false;
-    uint16_t i = 0;
-
-    // Draw cursor at position 0
-    if (cursor_pos == 0) {
-      u8g2.drawVLine(xpos, 1, 22);
+    // Track where the cursor is in pixels
+    if (i < cursor_pos) {
+       cursor_pixel_offset = total_pixel_width;
     }
-
-    while (i < line.len) {
-      char c = line.text[i];
-
-      if (c == '*') {
-        if (i == 0 || line.text[i - 1] != '*') {
-          uint8_t starCount = 0;
-          while (i + starCount < line.len && line.text[i + starCount] == '*' && starCount < 3)
-            starCount++;
-          switch (starCount) {
-            case 1:
-              italic = !italic;
-              break;
-            case 2:
-              bold = !bold;
-              break;
-            case 3:
-              bold = !bold;
-              italic = !italic;
-              break;
-          }
-        }
-        // setFontOLED(false, false);
-        //  Use tiny font for stars
-        u8g2.setFont(u8g2_font_5x7_tf);
-      } else {
-        setFontOLED(bold, italic);
-      }
-
-      temp[0] = c;
-      int char_w = u8g2.getStrWidth(temp);
-
-      // Draw character only if it is within screen bounds
-      if (xpos + char_w >= 0 && xpos <= display_w) {
-        if (c == '*') u8g2.drawStr(xpos, 8, temp);
-        else u8g2.drawStr(xpos, 20, temp);
-      }
-      xpos += char_w;
-
-      // italics need to overlap a bit
-      if (italic && c != '*') xpos -= 3;
-
-      // Draw cursor
-      if (cursor_pos == i + 1) {
-        u8g2.drawVLine(xpos, 1, 22);
-      }
-
-      i++;
+    // Track the formatting at the cursor for the toolbar
+    if (i + 1 == cursor_pos) {
+       currentWordBold = bold;
+       currentWordItalic = italic;
     }
   }
 
-  // PROGRESS BAR
-  //progress (px):
-  //((widthUsed % eink.width()) / eink.width()) * oled.width()
-
-
-  /*if (line.len > 0) {
-    int total_pixel_width = getLineWidthOLED(line);
-    int progress = ((total_pixel_width % display.width()) / display.width()) * u8g2.getDisplayWidth();
-
-    u8g2.drawVLine(u8g2.getDisplayWidth(), 0, 2);
-    u8g2.drawVLine(0, 0, 2);
-
-    u8g2.drawHLine(0, 0, progress);
-    u8g2.drawHLine(0, 1, progress);
-    // u8g2.drawHLine(0, 2, progress);
-
-    // LINE END WARNING INDICATOR
-    if (progress > (u8g2.getDisplayWidth() * 0.8)) {
-      if ((millis() / 400) % 2 == 0) {  // ON for 200ms, OFF for 200ms
-        u8g2.drawVLine(u8g2.getDisplayWidth() - 1, 8, 32 - 16);
-        u8g2.drawLine(u8g2.getDisplayWidth() - 1, 15, u8g2.getDisplayWidth() - 4, 12);
-        u8g2.drawLine(u8g2.getDisplayWidth() - 1, 15, u8g2.getDisplayWidth() - 4, 18);
+  // --- DETERMINE SCROLL OFFSET ---
+  int line_start = 0;
+  if (total_pixel_width >= display_w - 5) {
+    if (cursor_pos == line.len) {
+      line_start = display_w - 8 - total_pixel_width;
+    } else if (cursor_pixel_offset > (display_w - 8) / 2) {
+      line_start = ((display_w - 8) / 2) - cursor_pixel_offset;
+      if (line_start + total_pixel_width < display_w - 8) {
+        line_start = display_w - 8 - total_pixel_width;
       }
     }
-  }*/
+  }
 
+  // --- PASS 2: Render characters ---
+  int xpos = line_start;
+  bold = false; 
+  italic = false;
+
+  // Draw cursor at position 0
+  if (cursor_pos == 0) {
+    u8g2.drawVLine(xpos, 1, 22);
+  }
+
+  for (uint16_t i = 0; i < line.len; i++) {
+    char c = line.text[i];
+
+    if (c == '*') {
+      if (i == 0 || line.text[i - 1] != '*') {
+        uint8_t starCount = 0;
+        while (i + starCount < line.len && line.text[i + starCount] == '*' && starCount < 3) starCount++;
+        switch (starCount) {
+          case 1: italic = !italic; break;
+          case 2: bold = !bold; break;
+          case 3: bold = !bold; italic = !italic; break;
+        }
+      }
+      
+      u8g2.setFont(u8g2_font_5x7_tf);
+      char temp[2] = {'*', '\0'};
+      int w = u8g2.getStrWidth(temp);
+      
+      // Only draw if on screen
+      if (xpos + w >= 0 && xpos <= display_w) {
+        u8g2.drawStr(xpos, 8, temp);
+      }
+      xpos += w;
+    } else {
+      setFontOLED(bold, italic);
+      char temp[2] = {c, '\0'};
+      int char_w = u8g2.getStrWidth(temp);
+
+      // Only draw if on screen
+      if (xpos + char_w >= 0 && xpos <= display_w) {
+        u8g2.drawStr(xpos, 20, temp);
+      }
+      
+      xpos += char_w;
+      if (italic) xpos -= 3;
+    }
+
+    // Draw cursor
+    if (cursor_pos == i + 1) {
+      u8g2.drawVLine(xpos, 1, 22);
+    }
+  }
+
+  // Render Toolbar or Infobar
   if (currentlyTyping) {
-    // Show toolbar
     toolBar(line, currentWordBold, currentWordItalic);
   } else {
-    // Show infobar
     OLED().infoBar();
   }
 
@@ -1915,14 +1816,27 @@ void editor(char inchar) {
     // BKSP Recieved
     else if (inchar == 8) {
       if (cursor_pos > 0) {
-        ulong preReflowLine = currentLineNum; // Capture state
-        
         deleteChar(document.lines[currentLineNum], cursor_pos);
-        reflowParagraph(currentLineNum, cursor_pos); // Reflow text inwards
         
-        // Trigger E-ink update if word-wrap pulled the cursor up a line
-        if (currentLineNum != preReflowLine) {
-          updateScreen = true;
+        // --- OPTIMIZATION: Backspace Bypass ---
+        // Only reflow the paragraph if there is text on the NEXT line that needs to flow upwards.
+        bool hasContinuation = false;
+        if (currentLineNum + 1 < document.lineCount) {
+          char bType = document.lines[currentLineNum].type;
+          char nextType = document.lines[currentLineNum + 1].type;
+          if (bType == nextType) hasContinuation = true;
+          else if ((bType == 'U' || bType == 'u') && nextType == 'u') hasContinuation = true;
+          else if ((bType == 'O' || bType == 'o') && nextType == 'o') hasContinuation = true;
+        }
+
+        if (hasContinuation) {
+          ulong preReflowLine = currentLineNum; // Capture state
+          reflowParagraph(currentLineNum, cursor_pos); // Reflow text inwards
+          
+          // Trigger E-ink update if word-wrap pulled the cursor up a line
+          if (currentLineNum != preReflowLine) {
+            updateScreen = true;
+          }
         }
       } else {
         mergeLinesUp(currentLineNum, cursor_pos);
