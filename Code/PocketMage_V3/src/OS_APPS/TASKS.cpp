@@ -39,7 +39,6 @@ void sortTasksByDueDate(std::vector<std::vector<String>> &tasks) {
 void updateTasksFile() {
   SDActive = true;
   pocketmage::setCpuSpeed(240);
-  delay(50);
   // Clear the existing tasks file first
   PM_SDAUTO().delFile("/sys/tasks.txt");
 
