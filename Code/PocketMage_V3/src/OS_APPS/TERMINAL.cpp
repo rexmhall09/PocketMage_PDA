@@ -189,6 +189,35 @@ void updateTerminalDisp() {
   EINK().refresh();
 }
 
+// FIX 2: Added proper recursive deletion helper function
+bool deleteRecursive(String path) {
+  File dir = global_fs->open(path);
+  if (!dir) return false;
+  if (!dir.isDirectory()) {
+    dir.close();
+    return global_fs->remove(path);
+  }
+  
+  File file = dir.openNextFile();
+  while (file) {
+    String childPath = path;
+    if (!childPath.endsWith("/")) childPath += "/";
+    childPath += file.name();
+    
+    bool isDir = file.isDirectory();
+    file.close();
+    
+    if (isDir) {
+      deleteRecursive(childPath);
+    } else {
+      global_fs->remove(childPath);
+    }
+    file = dir.openNextFile();
+  }
+  dir.close();
+  return global_fs->rmdir(path);
+}
+
 void funcSelect(String command) {
   String returnText = "";
 
@@ -382,46 +411,8 @@ void funcSelect(String command) {
     }
 
     if (returnText == "" && global_fs->exists(dirPath)) {
-      File root = global_fs->open(dirPath);
-      if (!root) {
-        returnText = "Failed to open path";
-      } else {
-        if (!root.isDirectory()) {
-          // Simple file delete
-          if (!global_fs->remove(dirPath))
-            returnText = "Failed to remove file";
-        } else {
-          // Recursive directory delete
-          File entry;
-          while (true) {
-            entry = root.openNextFile();
-            if (!entry)
-              break;
-
-            String entryPath = dirPath;
-            if (!entryPath.endsWith("/"))
-              entryPath += "/";
-            entryPath += entry.name();
-
-            if (entry.isDirectory()) {
-              // recurse inline by reusing rm -r logic
-              String subCmd = "rm -r " + entryPath;
-              command = subCmd;
-              root.close();
-              pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
-              newState = true;
-              return;
-            } else {
-              global_fs->remove(entryPath);
-            }
-            entry.close();
-          }
-          root.close();
-
-          // directory now empty
-          if (!global_fs->rmdir(dirPath))
-            returnText = "Failed to remove directory";
-        }
+      if (!deleteRecursive(dirPath)) {
+        returnText = "Failed to remove directory";
       }
     } else if (returnText == "") {
       returnText = "Path not found";
@@ -755,14 +746,14 @@ void funcSelect(String command) {
     if (arg.length() == 0) {
       returnText = "Usage: brew <filename>";
     } else {
-      // Ensure .txt extension or add it
+      // Ensure .c extension or add it
       if (!arg.endsWith(".c")) {
         // Check if there's an extension at all
         int dotIdx = arg.lastIndexOf('.');
         if (dotIdx != -1) {
           returnText = "Only .c files supported";
         } else {
-          // Append .txt automatically
+          // Append .c automatically
           arg += ".c";
         }
       }
@@ -778,9 +769,14 @@ void funcSelect(String command) {
         } 
         else {
           // Compile and run with Wrench
-          // filePath
+          // FIX 1: Explicitly check for nullptr to prevent strlen() panics, and free memory.
           const char* wrenchCode = readCFile(filePath);
-          compileWrench(wrenchCode);
+          if (wrenchCode) {
+            compileWrench(wrenchCode);
+            free((void*)wrenchCode);
+          } else {
+            returnText = "Failed to read or empty file";
+          }
 
           pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
           return;
