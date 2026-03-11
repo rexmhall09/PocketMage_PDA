@@ -569,6 +569,37 @@ int boolPrompt(String promptText) {
   }
 }
 
+void waitForKeypress(String message) {
+  KB().setKeyboardState(NORMAL); 
+  
+  OLED().oledWord(message, false, false, "Press any key to continue...");
+
+  for (;;) {
+    // Run background tasks
+    #if !OTA_APP // POCKETMAGE_OS
+      if (!noTimeout)  checkTimeout();
+      if (DEBUG_VERBOSE) printDebug();
+    #endif
+    updateBattState();
+
+    int currentMillis = millis();
+
+    if (currentMillis - KBBounceMillis >= KB_COOLDOWN) {
+      char inchar = KB().updateKeypress();
+
+      // If any key is pressed, break the loop and return
+      if (inchar != 0) {
+        KBBounceMillis = currentMillis; // Reset debounce timer
+        return; 
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+    yield();
+  }
+}
+
+
 // OTA_APP: Remove definition of saveEditingFile
 #if !OTA_APP
 void saveEditingFile() {
