@@ -183,6 +183,13 @@ String commandSelect(String command) {
   else if (command == "alexa") {
     returnText = "...";
   } 
+  else if (command == "crash") {
+    OLED().oledWord("Crashing CPU...");
+    // Force an ALU math exception
+    volatile int a = 10;
+    volatile int b = 0;
+    volatile int c = a / b;
+  }
   else {
     returnText = settingCommandSelect(command);
   }

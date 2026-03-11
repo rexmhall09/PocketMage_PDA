@@ -599,6 +599,43 @@ void waitForKeypress(String message) {
   }
 }
 
+void checkCrashState() {
+  // Get the high-level reason the CPU just rebooted
+  esp_reset_reason_t reset_reason = esp_reset_reason();
+
+  // Check if the reset was caused by a software crash or Watchdog Timeout
+  if (reset_reason == ESP_RST_PANIC || 
+      reset_reason == ESP_RST_WDT || 
+      reset_reason == ESP_RST_TASK_WDT || 
+      reset_reason == ESP_RST_INT_WDT) {
+    
+    String crashMsg = "Crash: ";
+
+    // Map the high-level ESP-IDF reason
+    switch (reset_reason) {
+      case ESP_RST_PANIC:    crashMsg += "Panic/Exception"; break;
+      case ESP_RST_WDT:      crashMsg += "Watchdog"; break;
+      case ESP_RST_TASK_WDT: crashMsg += "Task WDT"; break;
+      case ESP_RST_INT_WDT:  crashMsg += "Interrupt WDT"; break;
+      default:               crashMsg += "Unknown"; break;
+    }
+
+    // Grab the low-level ROM hardware reset reason for CPU0 (ESP32-S3 specific)
+    int romReason = (int)esp_rom_get_reset_reason(0);
+    crashMsg += " (Code " + String(romReason) + ")";
+
+    // 1. Force the system to boot to the HOME screen to escape boot-loops
+    prefs.begin("PocketMage", false);
+    prefs.putInt("CurrentAppState", HOME);
+    prefs.end();
+
+    // 2. Clear volatile SD states that might have caused the crash
+    PM_SDAUTO().setEditingFile("");
+
+    // 3. Halt the boot process and display the error on the OLED
+    waitForKeypress(crashMsg);
+  }
+}
 
 // OTA_APP: Remove definition of saveEditingFile
 #if !OTA_APP
