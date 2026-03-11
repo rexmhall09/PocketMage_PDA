@@ -19,6 +19,8 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
+#define WDT_TIMEOUT_SECONDS 5
 
 static constexpr const char* TAG = "SYSTEM";
 
@@ -318,6 +320,9 @@ void PocketMage_INIT() {
   // Load State
   loadState();
   ESP_LOGD(TAG, "loaded state");
+
+  // Check if there was a crash
+  checkCrashState();
 
   // STARTUP JINGLE
   setupBZ();
