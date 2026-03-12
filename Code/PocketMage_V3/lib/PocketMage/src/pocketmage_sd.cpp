@@ -23,17 +23,25 @@ static PocketmageSDSPI pm_sdspi;
 static PocketmageSDAUTO pm_sdauto;
 
 // Helpers
-static int countVisibleChars(String input) {
+// FIX 1: Read chunk-by-chunk directly from filesystem to prevent OOM panics on large files
+static int countVisibleCharsFile(fs::FS &fs, const char* path) {
+  File f = fs.open(path, "r");
+  if (!f || f.isDirectory()) return 0;
+  
   int count = 0;
-
-  for (size_t i = 0; i < input.length(); i++) {
-    char c = input[i];
-    // Check if the character is a visible character or space
-    if (c >= 32 && c <= 126) {  // ASCII range for printable characters and space
-      count++;
+  uint8_t buf[512];
+  
+  while (f.available()) {
+    size_t len = f.read(buf, sizeof(buf));
+    for (size_t i = 0; i < len; i++) {
+      if (buf[i] >= 32 && buf[i] <= 126) {
+        count++;
+      }
     }
+    vTaskDelay(1); // Pet watchdog on huge files
   }
-
+  
+  f.close();
   return count;
 }
 
@@ -460,8 +468,10 @@ void PocketmageSDMMC::saveFile() {
       return;
   } else {
       SDActive = true;
-      pocketmage::setCpuSpeed(240);
-      delay(50);
+      if (getCpuFrequencyMhz() != 240) {
+        pocketmage::setCpuSpeed(240);
+        delay(50);
+      }
 
       String textToSave = vectorToString();
       ESP_LOGV(TAG, "Text to save: %s", textToSave.c_str());
@@ -487,8 +497,10 @@ void PocketmageSDMMC::saveFile() {
 }  
 void PocketmageSDMMC::writeMetadata(const String& path) {
   SDActive = true;
-  pocketmage::setCpuSpeed(240);
-  delay(50);
+  if (getCpuFrequencyMhz() != 240) {
+    pocketmage::setCpuSpeed(240);
+    delay(50);
+  }
 
   File file = global_fs->open(path);
   if (!file || file.isDirectory()) {
@@ -504,8 +516,8 @@ void PocketmageSDMMC::writeMetadata(const String& path) {
   // Format size string
   String fileSizeStr = String(fileSizeBytes) + " Bytes";
 
-  // Get line and char counts
-  int charCount = countVisibleChars(PM_SDMMC().readFileToString(SD_MMC, path.c_str()));
+  // Get line and char counts (Safely streaming from file now)
+  int charCount = countVisibleCharsFile(SD_MMC, path.c_str());
 
   String charStr = String(charCount) + " Char";
   // Get current time from RTC
@@ -564,8 +576,10 @@ void PocketmageSDMMC::loadFile(bool showOLED) {
       return;
   } else {
       SDActive = true;
-      pocketmage::setCpuSpeed(240);
-      delay(50);
+      if (getCpuFrequencyMhz() != 240) {
+        pocketmage::setCpuSpeed(240);
+        delay(50);
+      }
 
       keypad.disableInterrupts();
       if (showOLED)
@@ -803,17 +817,18 @@ void PocketmageSDMMC::listDir(fs::FS &fs, const char *dirname) {
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Listing directory %s\r\n", dirname);
 
     File root = fs.open(dirname);
     if (!root) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open directory: %s", root.path());
       return;
     }
     if (!root.isDirectory()) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Not a directory: %s", root.path());
       
       return;
@@ -846,11 +861,7 @@ void PocketmageSDMMC::listDir(fs::FS &fs, const char *dirname) {
       file = root.openNextFile();
     }
 
-    // for (int i = 0; i < fileIndex_; i++) { // Only print valid entries
-    //   Serial.println(filesList_[i]);       // NOTE: This prints out valid files
-    // }
-
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -863,18 +874,19 @@ void PocketmageSDMMC::readFile(fs::FS &fs, const char *path) {
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Reading file %s\r\n", path);
 
     File file = fs.open(path);
     if (!file || file.isDirectory()) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open file for reading: %s", file.path());
       return;
     }
 
     file.close();
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -888,12 +900,13 @@ String PocketmageSDMMC::readFileToString(fs::FS &fs, const char *path) {
     pocketmage::setCpuSpeed(240);
     delay(50);
 
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Reading file: %s\r\n", path);
 
     File file = fs.open(path);
     if (!file || file.isDirectory()) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open file for reading: %s", path);
       OLED().oledWord("Load Failed");
       delay(500);
@@ -905,7 +918,7 @@ String PocketmageSDMMC::readFileToString(fs::FS &fs, const char *path) {
 
     file.close();
     EINK().setFullRefreshAfter(FULL_REFRESH_AFTER); //Force a full refresh
-    noTimeout = false;
+    noTimeout = prevTimeout;
     return content;  // Return the complete String
   }
 }
@@ -918,13 +931,13 @@ void PocketmageSDMMC::writeFile(fs::FS &fs, const char *path, const char *messag
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Writing file: %s\r\n", path);
-    delay(200);
 
     File file = fs.open(path, FILE_WRITE);
     if (!file) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open %s for writing", path);
       return;
     }
@@ -935,7 +948,7 @@ void PocketmageSDMMC::writeFile(fs::FS &fs, const char *path, const char *messag
       ESP_LOGE(tag, "Write failed for %s", path);
     }
     file.close();
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -948,12 +961,13 @@ void PocketmageSDMMC::appendFile(fs::FS &fs, const char *path, const char *messa
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Appending to file: %s\r\n", path);
 
     File file = fs.open(path, FILE_APPEND);
     if (!file) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open for appending: %s", path);
       return;
     }
@@ -964,7 +978,7 @@ void PocketmageSDMMC::appendFile(fs::FS &fs, const char *path, const char *messa
       ESP_LOGE(tag, "Append failed: %s", path);
     }
     file.close();
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -977,6 +991,7 @@ void PocketmageSDMMC::renameFile(fs::FS &fs, const char *path1, const char *path
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Renaming file %s to %s\r\n", path1, path2);
 
@@ -986,7 +1001,7 @@ void PocketmageSDMMC::renameFile(fs::FS &fs, const char *path1, const char *path
     else {
       ESP_LOGE(tag, "Rename failed: %s to %s", path1, path2);
     }
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -999,6 +1014,7 @@ void PocketmageSDMMC::deleteFile(fs::FS &fs, const char *path) {
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Deleting file: %s\r\n", path);
     if (fs.remove(path)) {
@@ -1007,7 +1023,7 @@ void PocketmageSDMMC::deleteFile(fs::FS &fs, const char *path) {
     else {
       ESP_LOGE(tag, "Delete failed for %s", path);
     }
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -1018,14 +1034,14 @@ bool PocketmageSDMMC::readBinaryFile(const char* path, uint8_t* buf, size_t len)
     return false;
   }
 
-  setCpuFrequencyMhz(240  );
-  if (noTimeout)
-    noTimeout = true;
+  pocketmage::setCpuSpeed(240);
+  
+  bool prevTimeout = noTimeout;
+  noTimeout = true;
     
   File f = global_fs->open(path, "r");
   if (!f || f.isDirectory()) {
-    if (noTimeout)
-      noTimeout = false;
+    noTimeout = prevTimeout;
     ESP_LOGE(tag, "Failed to open file: %s", path);
     return false;
   }
@@ -1033,8 +1049,7 @@ bool PocketmageSDMMC::readBinaryFile(const char* path, uint8_t* buf, size_t len)
   size_t n = f.read(buf, len);
   f.close();
 
-  if (noTimeout)
-    noTimeout = false;
+  noTimeout = prevTimeout;
   if (SAVE_POWER)
     pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
 
@@ -1067,8 +1082,10 @@ void PocketmageSDSPI::saveFile() {
   }
 
   SDActive = true;
-  pocketmage::setCpuSpeed(240);
-  delay(50);
+  if (getCpuFrequencyMhz() != 240) {
+    pocketmage::setCpuSpeed(240);
+    delay(50);
+  }
 
   String textToSave = vectorToString();
 
@@ -1092,8 +1109,10 @@ void PocketmageSDSPI::saveFile() {
 }
 void PocketmageSDSPI::writeMetadata(const String& path) {
   SDActive = true;
-  pocketmage::setCpuSpeed(240);
-  delay(50);
+  if (getCpuFrequencyMhz() != 240) {
+    pocketmage::setCpuSpeed(240);
+    delay(50);
+  }
 
   File file = global_fs->open(path);
   if (!file || file.isDirectory()) {
@@ -1110,9 +1129,9 @@ void PocketmageSDSPI::writeMetadata(const String& path) {
   // Format size string
   String fileSizeStr = String(fileSizeBytes) + " Bytes";
 
-  // Get line and char counts
-  int charCount =
-      countVisibleChars(PM_SDSPI().readFileToString(SD, path.c_str()));
+  // Get line and char counts (Safely streaming from file now)
+  int charCount = countVisibleCharsFile(SD, path.c_str());
+      
   String charStr = String(charCount) + " Char";
 
   // Get current time from RTC
@@ -1173,8 +1192,10 @@ void PocketmageSDSPI::loadFile(bool showOLED) {
   }
 
   SDActive = true;
-  pocketmage::setCpuSpeed(240);
-  delay(50);
+  if (getCpuFrequencyMhz() != 240) {
+    pocketmage::setCpuSpeed(240);
+    delay(50);
+  }
 
   keypad.disableInterrupts();
 
@@ -1467,17 +1488,18 @@ void PocketmageSDSPI::listDir(fs::FS &fs, const char *dirname) {
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Listing directory %s\r\n", dirname);
 
     File root = fs.open(dirname);
     if (!root) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open directory: %s", root.path());
       return;
     }
     if (!root.isDirectory()) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Not a directory: %s", root.path());
       
       return;
@@ -1510,11 +1532,7 @@ void PocketmageSDSPI::listDir(fs::FS &fs, const char *dirname) {
       file = root.openNextFile();
     }
 
-    // for (int i = 0; i < fileIndex_; i++) { // Only print valid entries
-    //   Serial.println(filesList_[i]);       // NOTE: This prints out valid files
-    // }
-
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -1527,18 +1545,19 @@ void PocketmageSDSPI::readFile(fs::FS &fs, const char *path) {
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Reading file %s\r\n", path);
 
     File file = fs.open(path);
     if (!file || file.isDirectory()) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open file for reading: %s", file.path());
       return;
     }
 
     file.close();
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -1552,12 +1571,13 @@ String PocketmageSDSPI::readFileToString(fs::FS &fs, const char *path) {
     pocketmage::setCpuSpeed(240);
     delay(50);
 
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Reading file: %s\r\n", path);
 
     File file = fs.open(path);
     if (!file || file.isDirectory()) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open file for reading: %s", path);
       OLED().oledWord("Load Failed");
       delay(500);
@@ -1569,7 +1589,7 @@ String PocketmageSDSPI::readFileToString(fs::FS &fs, const char *path) {
 
     file.close();
     EINK().setFullRefreshAfter(FULL_REFRESH_AFTER); //Force a full refresh
-    noTimeout = false;
+    noTimeout = prevTimeout;
     return content;  // Return the complete String
   }
 }
@@ -1582,13 +1602,13 @@ void PocketmageSDSPI::writeFile(fs::FS &fs, const char *path, const char *messag
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Writing file: %s\r\n", path);
-    delay(200);
 
     File file = fs.open(path, FILE_WRITE);
     if (!file) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open %s for writing", path);
       return;
     }
@@ -1599,7 +1619,7 @@ void PocketmageSDSPI::writeFile(fs::FS &fs, const char *path, const char *messag
       ESP_LOGE(tag, "Write failed for %s", path);
     }
     file.close();
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -1612,12 +1632,13 @@ void PocketmageSDSPI::appendFile(fs::FS &fs, const char *path, const char *messa
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Appending to file: %s\r\n", path);
 
     File file = fs.open(path, FILE_APPEND);
     if (!file) {
-      noTimeout = false;
+      noTimeout = prevTimeout;
       ESP_LOGE(tag, "Failed to open for appending: %s", path);
       return;
     }
@@ -1628,7 +1649,7 @@ void PocketmageSDSPI::appendFile(fs::FS &fs, const char *path, const char *messa
       ESP_LOGE(tag, "Append failed: %s", path);
     }
     file.close();
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -1641,6 +1662,7 @@ void PocketmageSDSPI::renameFile(fs::FS &fs, const char *path1, const char *path
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Renaming file %s to %s\r\n", path1, path2);
 
@@ -1650,7 +1672,7 @@ void PocketmageSDSPI::renameFile(fs::FS &fs, const char *path1, const char *path
     else {
       ESP_LOGE(tag, "Rename failed: %s to %s", path1, path2);
     }
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -1663,6 +1685,7 @@ void PocketmageSDSPI::deleteFile(fs::FS &fs, const char *path) {
   else {
     pocketmage::setCpuSpeed(240);
     delay(50);
+    bool prevTimeout = noTimeout;
     noTimeout = true;
     ESP_LOGI(tag, "Deleting file: %s\r\n", path);
     if (fs.remove(path)) {
@@ -1671,7 +1694,7 @@ void PocketmageSDSPI::deleteFile(fs::FS &fs, const char *path) {
     else {
       ESP_LOGE(tag, "Delete failed for %s", path);
     }
-    noTimeout = false;
+    noTimeout = prevTimeout;
     if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
   }
 }
@@ -1682,12 +1705,14 @@ bool PocketmageSDSPI::readBinaryFile(const char* path, uint8_t* buf, size_t len)
     return false;
   }
 
-  setCpuFrequencyMhz(240);
-  if (noTimeout) noTimeout = true;
+  pocketmage::setCpuSpeed(240);
+  
+  bool prevTimeout = noTimeout;
+  noTimeout = true;
 
   File f = global_fs->open(path, FILE_READ);
   if (!f || f.isDirectory()) {
-    noTimeout = false;
+    noTimeout = prevTimeout;
     ESP_LOGE(tag, "Failed to open file: %s", path);
     return false;
   }
@@ -1695,7 +1720,7 @@ bool PocketmageSDSPI::readBinaryFile(const char* path, uint8_t* buf, size_t len)
   size_t n = f.read(buf, len);
   f.close();
 
-  noTimeout = false;
+  noTimeout = prevTimeout;
   if (SAVE_POWER) pocketmage::setCpuSpeed(POWER_SAVE_FREQ);
 
   return n == len;
