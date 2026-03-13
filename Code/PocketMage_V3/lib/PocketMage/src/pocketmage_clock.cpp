@@ -46,6 +46,14 @@ bool PocketmageCLOCK::begin() {
   return true;
 }
 
+// Helper to prevent silent 0 parsing on invalid strings
+static bool isNumeric(const String& str) {
+  for (size_t i = 0; i < str.length(); i++) {
+    if (!isdigit(str[i])) return false;
+  }
+  return true;
+}
+
 PocketmageCLOCK::TimeParseResult PocketmageCLOCK::parseTimeString(const String& timeStr,
                                                                   int& outHours, int& outMinutes) {
   String s = timeStr;
@@ -87,11 +95,18 @@ PocketmageCLOCK::TimeParseResult PocketmageCLOCK::parseTimeString(const String& 
     if (mStr.length() != 2 || hStr.length() < 1 || hStr.length() > 2)
       return TIME_INVALID_FORMAT;
 
+    // FIX 1: Verify string is actually numbers before toInt() returns a silent 0
+    if (!isNumeric(hStr) || !isNumeric(mStr)) 
+      return TIME_INVALID_FORMAT;
+
     outHours = hStr.toInt();
     outMinutes = mStr.toInt();
   } else {
     // HMM or HHMM
     if (s.length() < 3 || s.length() > 4)
+      return TIME_INVALID_FORMAT;
+
+    if (!isNumeric(s)) 
       return TIME_INVALID_FORMAT;
 
     int value = s.toInt();
@@ -128,8 +143,9 @@ void PocketmageCLOCK::setTimeFromString(String timeStr) {
     return;
   }
 
-  DateTime now = CLOCK().nowDT();
-  CLOCK().getRTC().adjust(DateTime(now.year(), now.month(), now.day(), hours, minutes, 0));
+  // FIX 2: Use internal hardware reference (rtc_) instead of global object call
+  DateTime now = rtc_.now();
+  rtc_.adjust(DateTime(now.year(), now.month(), now.day(), hours, minutes, 0));
 
   ESP_LOGI(TAG, "Time updated to %02d:%02d", hours, minutes);
 }
@@ -140,4 +156,3 @@ bool PocketmageCLOCK::isValid() {
   const bool saneYear = t.year() >= 2020 && t.year() < 2099;  // check for reasonable year for DateTime t
   return saneYear;
 }
-
