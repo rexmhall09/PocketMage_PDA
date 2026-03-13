@@ -60,7 +60,6 @@ void PocketmageEink::multiPassRefresh(int passes) {
 }
 
 void PocketmageEink::setFastFullRefresh(bool setting) {
-  // FIX: Only write to the fast update flag if it is actually changing state
   if (PanelT::useFastFullUpdate != setting) {
     PanelT::useFastFullUpdate = setting;
   }
@@ -94,7 +93,6 @@ void PocketmageEink::computeFontMetrics_() {
   // GET AVERAGE CHAR WIDTH
   display_.getTextBounds("abcdefghijklmnopqrstuvwxyz", 0, 0, &x1, &y1, &charWidth, &charHeight);
   
-  // FIX: The alphabet is 26 characters, not 52! 
   charWidth = charWidth / 26; 
   
   maxCharsPerLine_  = display_.width() / charWidth;
@@ -165,7 +163,6 @@ void setupEink() {
 
 uint16_t PocketmageEink::getEinkTextWidth(const String& s) {
   int16_t x1, y1; uint16_t w, h;
-  // FIX: Swapped global 'display' for local class member 'display_'
   display_.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
   return w;
 }

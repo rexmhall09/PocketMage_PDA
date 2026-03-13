@@ -42,11 +42,10 @@ void checkTimeout() {
       unsigned long j = millis();
       while ((j - i) <= 4000) {  // 4 sec
         j = millis();
-        // FIX: Check centralized KB stack so USB keyboards can cancel sleep too
         if (KB().updateKeypress() != 0) {
           OLED().oledWord("Good Save!");
           delay(500);
-          CLOCK().setPrevTimeMillis(millis());
+          CLOCK().setPrevTimeMillis(millis()); // Reset system idle timer
           keypad.flush();
           return;
         }
@@ -298,8 +297,8 @@ void updateBattState() {
 String textPrompt(String promptText, String prefix) {
   String currentLine = "";
   int cursor_pos = 0;
-  long lastInput = millis();
-  bool redraw = true; // FIX: Only redraw OLED when necessary
+  long lastInput = CLOCK().getPrevTimeMillis(); // Sync to system idle
+  bool redraw = true; 
 
   for (;;) {
     #if !OTA_APP 
@@ -314,12 +313,18 @@ String textPrompt(String promptText, String prefix) {
     String left = "";
     String right = "";
 
+    unsigned long currentSystemTime = CLOCK().getPrevTimeMillis();
+    if (currentSystemTime > lastInput) {
+        lastInput = currentSystemTime;
+        redraw = true;
+    }
+
     if (currentMillis - KBBounceMillis >= KB_COOLDOWN) {
       char inchar = KB().updateKeypress();
 
       if (inchar != 0) {
         lastInput = millis();
-        KBBounceMillis = currentMillis; // FIX: Reset debounce timer
+        KBBounceMillis = currentMillis; 
         redraw = true;
       }
 
@@ -425,7 +430,6 @@ String textPrompt(String promptText, String prefix) {
          wasIdle = isIdle;
       }
 
-      // FIX: Only spam SPI bus if redraw flag is true
       if (redraw && (currentMillis - OLEDFPSMillis >= (1000 / OLED_MAX_FPS))) {
         OLEDFPSMillis = currentMillis;
         redraw = false;
@@ -450,6 +454,7 @@ String textPrompt(String promptText, String prefix) {
 int boolPrompt(String promptText) {
   KB().setKeyboardState(NORMAL);
   OLED().oledWord(promptText + " (y/n)");
+  unsigned long lastSystemTime = CLOCK().getPrevTimeMillis();
 
   for (;;) {
     #if !OTA_APP 
@@ -459,17 +464,22 @@ int boolPrompt(String promptText) {
     
     updateBattState();
 
+    // Redraw if background tasks overwrite the screen
+    unsigned long currentSystemTime = CLOCK().getPrevTimeMillis();
+    if (currentSystemTime > lastSystemTime) {
+        lastSystemTime = currentSystemTime;
+        OLED().oledWord(promptText + " (y/n)"); 
+    }
+
     int currentMillis = millis();
 
     if (currentMillis - KBBounceMillis >= KB_COOLDOWN) {
       char inchar = KB().updateKeypress();
 
       if (inchar != 0) {
-          KBBounceMillis = currentMillis; // FIX: Update debounce timer
+          KBBounceMillis = currentMillis; 
       }
 
-      // HANDLE INPUTS
-      // FIX: Ignored invalid keys entirely instead of immediately aborting prompt
       if (inchar == 'y' || inchar == 'Y') {
         return 1;
       }
@@ -486,6 +496,7 @@ int boolPrompt(String promptText) {
 void waitForKeypress(String message) {
   KB().setKeyboardState(NORMAL); 
   OLED().oledWord(message, false, false, "Press any key to continue...");
+  unsigned long lastSystemTime = CLOCK().getPrevTimeMillis();
 
   for (;;) {
     #if !OTA_APP 
@@ -494,6 +505,13 @@ void waitForKeypress(String message) {
     #endif
     
     updateBattState();
+
+    // Redraw if background tasks overwrite the screen
+    unsigned long currentSystemTime = CLOCK().getPrevTimeMillis();
+    if (currentSystemTime > lastSystemTime) {
+        lastSystemTime = currentSystemTime;
+        OLED().oledWord(message, false, false, "Press any key to continue...");
+    }
 
     int currentMillis = millis();
 

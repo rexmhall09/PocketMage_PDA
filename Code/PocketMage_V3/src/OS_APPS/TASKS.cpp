@@ -121,7 +121,6 @@ void updateTaskArray() {
       continue;
     }
 
-    // FIX: Changed from uint8_t to int to prevent wrap-around bugs if '|' is missing
     int delimiterPos1 = line.indexOf('|');
     int delimiterPos2 = line.indexOf('|', delimiterPos1 + 1);
     int delimiterPos3 = line.indexOf('|', delimiterPos2 + 1);
@@ -301,7 +300,6 @@ void processKB_TASKS() {
         // SELECT A TASK
         else if (inchar >= '1' && inchar <= '4') {
             
-          // FIX: Wrap inside a bounds check so background array shifts don't cause fatal exceptions
           if (selectedTask >= 0 && selectedTask < tasks.size()) {
               if (inchar == '1') {      // RENAME TASK
                 KB().setKeyboardState(NORMAL);

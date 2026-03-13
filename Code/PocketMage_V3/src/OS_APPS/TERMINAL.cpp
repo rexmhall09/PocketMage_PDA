@@ -1229,7 +1229,6 @@ void processKB_TERMINAL() {
             cursor_pos--;
           }
           else if (potionLines[currentPotionLine].length() == 0) {
-            // FIX: Prevent deleting the only remaining line in the document
             if (potionLines.size() > 1) {
               potionLines.erase(potionLines.begin() + currentPotionLine);
               
@@ -1268,7 +1267,6 @@ void processKB_TERMINAL() {
             else if (line < 0) currentPotionLine = 0;
             else if (line >= potionLines.size()) currentPotionLine = potionLines.size() - 1;
             
-            // FIX: Prevent substring out-of-bounds crash by clamping cursor
             cursor_pos = potionLines[currentPotionLine].length();
             newState = true;
           }
@@ -1409,7 +1407,6 @@ void einkHandler_TERMINAL() {
           if (currentPotionLine <= 20) {
             int y = 10;
             for (size_t i = 0; i < potionLines.size(); i++) {
-              // FIX: i >= potionLines.size()
               if (i >= potionLines.size() || y < 0 || y > (display.height()+10)) continue;
 
               const String& s = potionLines[i];
@@ -1435,7 +1432,6 @@ void einkHandler_TERMINAL() {
           else {
             int y = 10;
             for (size_t i = currentPotionLine - 20; i < currentPotionLine + 3; i++) {
-              // FIX: i >= potionLines.size()
               if (i >= potionLines.size() || y < 0 || y > (display.height()+10)) continue;
 
               const String& s = potionLines[i];
