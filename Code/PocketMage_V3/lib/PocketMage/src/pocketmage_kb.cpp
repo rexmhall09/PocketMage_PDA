@@ -729,6 +729,8 @@ char PocketmageKB::updateKeypress() {
   // Check for USB char
   char USB_CHAR = pop_USB_char();
   if (USB_CHAR != '\0') {
+    //Key was pressed, reset timeout counter
+    CLOCK().setPrevTimeMillis(millis());
     return USB_CHAR;
   }
 
