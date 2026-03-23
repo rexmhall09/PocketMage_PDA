@@ -37,6 +37,9 @@ void PocketmageTOUCH::updateScrollFromTouch() {
   unsigned long now = millis();
 
   if (newTouch != -1) {
+    // reset timeout
+    CLOCK().setPrevTimeMillis(millis());
+
     if (lastTouch_ != -1) {
       int d = abs(newTouch - lastTouch_);
       if (d <= 2) {
@@ -78,6 +81,9 @@ bool PocketmageTOUCH::updateScroll(int maxScroll, ulong& lineScroll) {
   unsigned long currentTime = millis();
 
   if (touchPos != -1) {  // If a touch is detected
+    // reset timeout
+    CLOCK().setPrevTimeMillis(millis());
+
     if (lastTouchPos != -1) {  // Compare with previous touch
       int touchDelta = abs(touchPos - lastTouchPos);
       if (touchDelta <= 2) {  // Ignore large jumps
