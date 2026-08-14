@@ -4,10 +4,10 @@ title: Features
 description: "What PocketMage can do today."
 source: "https://tailsmandesign.github.io/PocketMage_PDA/docs/features/"
 path: /features/
-updated: 2026-08-11
+updated: 2026-08-14
 okf:
   generated_by: "@docmd/plugin-okf"
-  generated_at: "2026-08-11T01:49:18.706Z"
+  generated_at: "2026-08-14T21:25:16.371Z"
 ---
 ---
 title: "Features"

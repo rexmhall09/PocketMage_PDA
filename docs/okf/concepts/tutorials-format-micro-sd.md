@@ -4,10 +4,10 @@ title: "Format a MicroSD Card for PocketMage"
 description: "Guide to formatting SD cards for compatibility with PocketMage."
 source: "https://tailsmandesign.github.io/PocketMage_PDA/docs/tutorials/format-micro-sd/"
 path: /tutorials/format-micro-sd/
-updated: 2026-08-11
+updated: 2026-08-14
 okf:
   generated_by: "@docmd/plugin-okf"
-  generated_at: "2026-08-11T01:49:18.717Z"
+  generated_at: "2026-08-14T21:25:16.377Z"
 ---
 ---
 title: "Format a MicroSD Card for PocketMage"
